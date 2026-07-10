@@ -1,0 +1,21 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "powershell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+
+# Deferred distribution channels — intentionally OFF until we have the credentials/repos:
+#   - Homebrew: add "homebrew" to `installers` + set `tap` to a formula repo (needs a tap repo + token).
+#   - npm:      add "npm" to `installers` + set `npm-scope` (needs an NPM_TOKEN secret).
+#   - crates.io: add `publish-jobs = ["cargo"]` (needs a CARGO_REGISTRY_TOKEN secret).
+# Re-run `dist init && dist generate` after enabling any of these.

@@ -2,6 +2,10 @@
 name = "cardano-init"
 version = "0.1.0"
 edition = "2024"
+description = "Scaffold a complete, runnable Cardano protocol project in seconds."
+repository = "https://github.com/input-output-hk/cardano-init"
+license = "Apache-2.0"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -16,3 +20,8 @@ serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
