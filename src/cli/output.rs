@@ -277,7 +277,7 @@ pub fn print_success(selection: &Selection, report: &Report, format: Format) {
             "  {} Scaffolded {} ({})",
             style("✔").green().bold(),
             role_label,
-            &assignment.tool_id
+            assignment.tool_id
         );
     }
 

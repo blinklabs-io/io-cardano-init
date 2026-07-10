@@ -15,6 +15,20 @@ Built for newcomers and coding agents alike.
 
 ### Install
 
+Prebuilt binary (Linux, macOS, Windows — x86_64 and arm64). Once a release is published, grab it
+from the [Releases page](https://github.com/input-output-hk/cardano-init/releases), or use the
+one-line installer:
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/input-output-hk/cardano-init/releases/latest/download/cardano-init-installer.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://github.com/input-output-hk/cardano-init/releases/latest/download/cardano-init-installer.ps1 | iex
+```
+
 With Nix (flake):
 
 ```bash
@@ -135,6 +149,7 @@ just -f infra/Justfile dev
 | [docs/TECH_SPEC.md](docs/TECH_SPEC.md) | Exact contracts, schemas, algorithms, edge cases |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phases & milestones (DX.02, DX.05) |
 | [docs/ADDING_A_TOOL.md](docs/ADDING_A_TOOL.md) | Contributor guide for integrating a new tool |
+| [docs/RELEASING.md](docs/RELEASING.md) | How to cut a release and publish prebuilt binaries (cargo-dist) |
 
 
 ## Development
