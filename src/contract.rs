@@ -8,6 +8,12 @@ pub const DIR_OFF_CHAIN: &str = "off-chain";
 pub const DIR_INFRA: &str = "infra";
 pub const DIR_DEVNET: &str = "devnet";
 pub const DIR_FORMAL_METHODS: &str = "formal-methods";
+/// Directory for the fused on-chain+off-chain component emitted when a single
+/// tool fills both roles via its `[fullstack]` template. This is **not** a role
+/// directory (there is no `Role::Protocol`): it is a derived, aggregated
+/// component. Its `build` still writes `BLUEPRINT_PATH` and it reads/writes the
+/// standard `.env`, so it composes with the other roles like an on-chain producer.
+pub const DIR_PROTOCOL: &str = "protocol";
 
 /// Standard environment variable names for infrastructure.
 /// Infra templates write these to .env; consumers read them.

@@ -1,0 +1,17 @@
+# Fullstack component (Scalus) — PLACEHOLDER
+# Part of {{ project_name }}
+#
+# One unified Scala/sbt build for both on-chain validators and off-chain
+# transaction logic. The two halves share types directly (no blueprint round-trip
+# between them), but `build` still writes ../{{ blueprint_path }} so the other
+# components (devnet, formal-methods, infra) can consume it.
+
+build:
+    @echo "Scalus fullstack is a placeholder — not yet implemented."
+    @echo "When implemented, it compiles the Scala sources and writes ../{{ blueprint_path }}."
+
+test:
+    @echo "Scalus fullstack tests are a placeholder — not yet implemented."
+
+clean:
+    @echo "Nothing to clean (Scalus placeholder)."

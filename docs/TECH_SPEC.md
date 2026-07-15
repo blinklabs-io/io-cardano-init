@@ -35,6 +35,7 @@ cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 | `--name <NAME>` | string | Presence selects one-shot mode. Validated per §3.5. |
 | `--on-chain <TOOL_ID>` | string | At most one. |
 | `--off-chain <TOOL_ID>` | string | At most one. |
+| `--fullstack <TOOL_ID>` | string | Sugar for `--on-chain X --off-chain X`. The tool must declare a `[fullstack]` template (§3.2). Mutually exclusive with `--on-chain`/`--off-chain`. |
 | `--infra <TOOL_ID>` | string, repeatable | Multiple allowed (only multi-tool role). |
 | `--devnet <TOOL_ID>` | string | At most one. |
 | `--formal-methods <TOOL_ID>` | string | At most one. |
@@ -44,6 +45,12 @@ cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 
 
 Mode resolution: if `--name` is present → one-shot; else → interactive. Providing any one-shot flag **without** `--name` is a usage error (`name_required`).
+
+**`--fullstack` is pure CLI sugar** resolved at the edge: `--fullstack X` expands to the two
+assignments `--on-chain X` + `--off-chain X`. Combining it with an explicit `--on-chain`/`--off-chain`
+is a usage error (`fullstack_conflict`); naming a tool without a `[fullstack]` template is
+`fullstack_unsupported`. The *core* never sees a "fullstack" flag — the resulting same-tool-both-roles
+pair is what triggers the collapse into a single `protocol/` component (§3.2, §6.1).
 
 ### 2.3 Exit codes
 
@@ -79,6 +86,8 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `invalid_project_name` | 2 | `{ name, reason }` |
 | `unknown_tool` | 2 | `{ tool_id, role, valid_tools: [..] }` |
 | `tool_role_mismatch` | 2 | `{ tool_id, role, valid_roles: [..] }` |
+| `fullstack_conflict` | 2 | `{ }` (`--fullstack` combined with `--on-chain`/`--off-chain`) |
+| `fullstack_unsupported` | 2 | `{ tool_id, valid_tools: [..] }` (tool has no `[fullstack]` template; `valid_tools` = fullstack-capable tools) |
 | `no_roles_selected` | 2 | `{ }` |
 | `invalid_network` | 2 | `{ value, expected: ["preview","preprod","mainnet"] }` |
 | `dir_exists` | 1 | `{ path }` (exists and non-empty) |
@@ -131,6 +140,30 @@ nix_packages = ["aiken"]       # optional (default []); nixpkgs attrs for the de
 template = "aiken/on-chain"    # required; path under templates/
 ```
 
+A tool that fills **both** on-chain and off-chain may additionally declare a **`[fullstack]`**
+table. Its template is used when the same tool fills both roles, collapsing them into one unified
+`protocol/` component instead of two folders (§6.1). This is a *tool capability*, not a role —
+`protocol` is not a `Role`, and `Role::ALL` stays at five.
+
+```toml
+[roles.on-chain]               # required: a fullstack tool must fill both
+template = "scalus/on-chain"   # (used when scalus fills on-chain only, e.g. with a TS off-chain)
+
+[roles.off-chain]
+template = "scalus/off-chain"  # (used when scalus fills off-chain only)
+
+[fullstack]
+template = "scalus/fullstack"  # used when scalus fills BOTH → one protocol/ component
+```
+
+Validated at load: `[fullstack]` present ⇒ the tool must declare **both** `[roles.on-chain]` and
+`[roles.off-chain]`, else `RegistryError::FullstackRolesMissing`. The fullstack component still
+honors the external interface contract — its `build` writes `blueprint/plutus.json` and it reads/writes
+`.env` — so it composes with the other roles like any on-chain producer (§7). Fullstack privatizes
+only the *internal* on-chain↔off-chain seam. (Half-composition still works: scalus on-chain + a
+different off-chain tool, or vice-versa, each uses the corresponding `[roles.*]` template and the
+normal blueprint-file seam.)
+
 Tools filling the **infrastructure** role additionally require an `[infra]` table
 (validated at load: `[roles.infrastructure]` present ⇒ `[infra]` required, else
 `RegistryError::InfraConfigMissing`). It declares the `cardano-up` package and the
@@ -151,13 +184,14 @@ env = [{ from = "KUPO_URL", to = "INDEXER_URL" }]   # cardano-up output → cont
 RoleConfig { template }
 EnvMapping { from, to }
 InfraConfig { cardano_up_package, env: Vec<EnvMapping> }
-ToolDef { id, name, description, website, languages, nix_packages, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig> }
+ToolDef { id, name, description, website, languages, nix_packages, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig> }
 ```
 
 Load-time validation (`registry/loader.rs`), all fatal:
 - unparseable TOML → `RegistryError::Parse { file }`.
 - unknown role key → `RegistryError::UnknownRole { file, role }`.
 - duplicate `tool.id` → `RegistryError::DuplicateId { id }`.
+- `[fullstack]` without both on-chain and off-chain roles → `RegistryError::FullstackRolesMissing { id }`.
 - zero tools discovered → `RegistryError::Empty`.
 
 ### 3.3 Selection
@@ -174,6 +208,7 @@ A `Selection` is **valid by construction** (ARCHITECTURE §3.3); there is no sep
 
 - Non-infra roles: at most one tool (interactive allows one; one-shot flags are single).
 - Infrastructure: ≥1 tools. **Duplicate `--infra X --infra X` is de-duplicated** (keep first occurrence) so the plan can't emit `infra/X/` twice. (Dedupe, not error: idempotent and harmless.)
+- **Fullstack collapse:** when the *same* `tool_id` fills both on-chain and off-chain **and** that tool declares a `[fullstack]` template, the two assignments collapse into a single `protocol/` component at planning time (§6.1). The `Selection` still carries both `RoleAssignment`s (the collapse is *derived*, keeping `Selection` valid-by-construction and the blueprint predicate unchanged, §6.2). Same tool for both roles with **no** `[fullstack]` template falls back to two separate folders (today's behavior).
 
 ### 3.5 Project-name rules
 
@@ -241,9 +276,13 @@ struct TemplateContext {
 
     has_on_chain: bool, has_off_chain: bool, has_infra: bool,
     has_devnet: bool,  has_formal_methods: bool,
+    has_fullstack: bool,             // one tool fills both on-chain+off-chain (§3.4)
 
     on_chain: Option<RoleContext>,
     off_chain: Option<RoleContext>,
+    fullstack: Option<RoleContext>,  // the fused protocol/ component; dir = "protocol".
+                                     // When Some, on_chain/off_chain are None (the two roles
+                                     // are represented by this single component instead).
     infra_tools: Vec<InfraToolContext>,  // 0..n, canonical order (§11); aggregated infra component
     devnet: Option<RoleContext>,
     formal_methods: Option<RoleContext>,
@@ -283,7 +322,9 @@ Determinism note: any consumer that emits tools/roles must sort (§11), since `b
 
 1. **Base layer** (always): `Justfile`, `README.md`, `.gitignore`, `.env`.
 2. **Blueprint dir**: `blueprint/.gitkeep`, **if  any non-infrastructure role is present** (§6.2). Source is `TemplateSource::Inline(empty)`.
-3. **Role layers**: assignments processed in **`Role::ALL` order** (not flag order). For each, read the template manifest and append its files (rendered per §4.2). **Infrastructure aggregates**: all selected infra tools share one driver template (`_infra/cardano-up`), emitted **once** at `infra/` on the first infra assignment (the rest are contiguous after the canonical sort and skipped); they are still sorted by `tool_id` for the rendered `infra_tools`/`infra_env` order (§11). All infra tools must resolve to the same template path, else `ScaffoldError::InfraTemplateMismatch`. See `docs/proposals/infra-via-cardano-up.md`.
+3. **Role layers**: assignments processed in **`Role::ALL` order** (not flag order). For each, read the template manifest and append its files (rendered per §4.2). Two roles aggregate instead of emitting per-assignment:
+   - **Fullstack collapses**: when the same tool fills on-chain + off-chain and declares a `[fullstack]` template (§3.4), the two assignments emit **one** `protocol/` component from the `[fullstack]` template, emitted **once** on the first of the pair (on-chain sorts first in `Role::ALL`), the off-chain assignment is skipped. `has_on_chain`/`has_off_chain` are false; `has_fullstack` is true. Because both assignments remain in the selection, the blueprint predicate (§6.2) is unchanged.
+   - **Infrastructure aggregates**: all selected infra tools share one driver template (`_infra/cardano-up`), emitted **once** at `infra/` on the first infra assignment (the rest are contiguous after the canonical sort and skipped); they are still sorted by `tool_id` for the rendered `infra_tools`/`infra_env` order (§11). All infra tools must resolve to the same template path, else `ScaffoldError::InfraTemplateMismatch`.
 4. **Optional layer**: if `nix`, `flake.nix` (rendered) + `.envrc` (`Inline "use flake\n"`).
 
 `--dry-run` returns this `FilePlan` (no rendering, no I/O).
@@ -294,7 +335,7 @@ Determinism note: any consumer that emits tools/roles must sort (§11), since `b
 blueprint_present  ⇔  assignments.iter().any(|a| a.role != Role::Infrastructure)
 ```
 
-The **directory** (via `.gitkeep`) exists for every project except infrastructure-only; the **`plutus.json` file** is produced by on-chain `build` and may be absent, so consumers must tolerate a missing file (§7).
+The **directory** (via `.gitkeep`) exists for every project except infrastructure-only; the **`plutus.json` file** is produced by on-chain `build` and may be absent, so consumers must tolerate a missing file (§7). A **fullstack** project keeps the directory: the collapse is derived and both on-chain/off-chain assignments stay in the selection, so the predicate holds and the `protocol/` component's `build` writes the blueprint like any on-chain producer.
 
 ### 6.3 `.env` seeding
 
@@ -319,6 +360,7 @@ Constants (`contract.rs`):
 **Every component Justfile** exposes `build`, `test`, `clean` and works standalone (its `just build` succeeds with no other roles present). A target that is a no-op for a tool still exists (may print a message). **`dev` is optional**: a component provides it only when it has a genuine watch/daemon/devnet mode — there are no no-op `dev` targets (it is not aggregated at the top level, §7.2, so an absent `dev` costs nothing).
 
 - **On-chain** `build` writes `../blueprint/plutus.json`.
+- **Fullstack (`protocol/`)** `build` also writes `../blueprint/plutus.json` (it *is* the on-chain producer for its project) and reads/writes `../.env` like an off-chain consumer. Its internal on-chain↔off-chain link may bypass the file (shared in-process types), but the external seam is mandatory so devnet/formal/infra still compose.
 - **Off-chain / devnet / formal-methods** read `../blueprint/plutus.json` and `../.env` if present; degrade gracefully if absent.
 - **The component that provisions a local chain endpoint** writes the standard connection vars (`INDEXER_URL`, …) into `../.env` during its `dev`. This is **role-agnostic**: it is typically an *infrastructure* service, but a local devnet such as Yaci DevKit in the *devnet* role does it too. The seam is the `.env` keys, not the role — a tool's **role** is its *purpose*, while writing `.env` is the orthogonal *capability* of exposing a local endpoint. Consumers react only to the presence of `INDEXER_URL`, never to which tool/role set it (this is what keeps composition O(tools), ARCHITECTURE §1).
 
@@ -326,8 +368,8 @@ Constants (`contract.rs`):
 
 The top level aggregates only the tasks that **terminate and compose**:
 
-- `build`: each present component's `build`, on-chain first (so the blueprint exists for consumers), then off-chain/devnet/formal in `Role::ALL` order.
-- `test`: on-chain `build` first (produce the blueprint), then each present component's `test` in `Role::ALL` order — on-chain, off-chain, devnet, and formal-methods (`verify`).
+- `build`: each present component's `build`, on-chain first (so the blueprint exists for consumers), then off-chain/devnet/formal in `Role::ALL` order. A **fullstack `protocol/`** component takes the on-chain producer slot (built first).
+- `test`: on-chain `build` first (produce the blueprint), then each present component's `test` in `Role::ALL` order — on-chain, off-chain, devnet, and formal-methods (`verify`). For fullstack, `protocol` builds then tests first.
 - `clean`: each component's `clean`, then `rm -f blueprint/plutus.json`.
 
 ### 7.2 No top-level `dev`
@@ -353,13 +395,15 @@ A component whose `dev` provisions a local endpoint (e.g. Yaci DevKit's devnet) 
   ],
   "tools": [
     { "id": "aiken", "name": "Aiken", "description": "…", "website": "https://…",
-      "languages": ["aiken"], "roles": ["on-chain"] }
+      "languages": ["aiken"], "roles": ["on-chain"], "fullstack": false },
+    { "id": "scalus", "name": "Scalus", "description": "…", "website": "https://…",
+      "languages": ["scala"], "roles": ["off-chain","on-chain"], "fullstack": true }
     /* … tools sorted by id; each tool's roles sorted … */
   ]
 }}
 ```
 
-Both `list` and `web::build_registry_json` render from one shared model (`registry::view`: `role_views()` / `tool_views()`), so they cannot drift. `roles[].multiple` is `true` only for infrastructure (`Role::multiple`).
+Both `list` and `web::build_registry_json` render from one shared model (`registry::view`: `role_views()` / `tool_views()`), so they cannot drift. `roles[].multiple` is `true` only for infrastructure (`Role::multiple`). `tools[].fullstack` is `true` when the tool declares a `[fullstack]` template (i.e. `--fullstack <tool>` is valid); it is an additive field (no `schema_version` bump). `fullstack` is a capability, **not** a role — it never appears in `tools[].roles` or in the `roles` array.
 
 ---
 
@@ -530,6 +574,8 @@ The standalone `cardano-init doctor` takes **no flags describing the project**: 
 
 **Infrastructure is the exception.** The aggregated `infra/` component has no per-tool subdirs (it's the single cardano-up driver), so it is *not* matched against per-tool `detect` signatures. Instead the scan recognizes it by a driver marker — `infra/Justfile` referencing `cardano-up` — and reports a synthetic `cardano-up` component (`doctor::INFRA_DRIVER_ID`). Its contribution to the required set is the **union of all registered infra tools' `system_deps`** (`{docker, cardano-up}`), data-driven from the registry. So infra tools carry `detect = []`.
 
+**Fullstack `protocol/` is scanned like a normal component.** `protocol/` is not a `Role::ALL` directory, so it is handled by a dedicated branch: if `protocol/` exists, it is matched against the `detect` signatures of the tools that declare a `[fullstack]` template (the same per-tool signatures used for the role dirs — a fullstack tool's signatures must therefore be present in its fullstack template). Exactly one match ⇒ that component is identified; zero/ambiguous ⇒ `protocol/` is *unrecognized*. Unlike infra, the identified tool is a **real registry tool**, so its `system_deps` feed the required set via the normal `registry.get` path (no synthetic id).
+
 **Detect signatures (`detect` in `registry/tools/<tool>.toml`).** A list; each entry is either:
 - a **bare path** (relative to the role dir) — matches if the file exists; or
 - a **table** `{ file = "<path>", contains = "<substring>" }` — matches if the file exists *and* its text contains the substring.
@@ -588,6 +634,11 @@ Identical `(binary, Selection)` ⇒ byte-identical tree. Rules:
 | No roles selected | error | `no_roles_selected` / 2 |
 | Bad `--network` | error | `invalid_network` / 2 |
 | `--infra X --infra X` | de-duplicated (keep first) | ok |
+| `--fullstack X` (X has `[fullstack]`) | one `protocol/` component | ok |
+| `--on-chain X --off-chain X` (X has `[fullstack]`) | collapses to one `protocol/` component | ok |
+| `--on-chain X --off-chain X` (X has no `[fullstack]`) | two separate folders (fallback) | ok |
+| `--fullstack X` (X has no `[fullstack]`) | error, list fullstack-capable tools | `fullstack_unsupported` / 2 |
+| `--fullstack X --on-chain Y` (or `--off-chain Y`) | error | `fullstack_conflict` / 2 |
 | Infra-only selection | no `blueprint/` dir | ok |
 | Target dir absent | created | ok |
 | Target dir empty | proceed | ok |
@@ -608,7 +659,7 @@ Identical `(binary, Selection)` ⇒ byte-identical tree. Rules:
 
 - `GET /` → `ui.html`.
 - `GET /api/registry` → `{ "tools": [ … ] }` (prebuilt once).
-- `GET /api/plan?on_chain=&off_chain=&infra=a,b&devnet=&formal_methods=&network=&nix=&name=` → `{ "files": [ … ] }`, computed by the **real `scaffold::planner`** (no duplicated logic). Invalid input → `{ "error": "…" }` with 4xx.
+- `GET /api/plan?on_chain=&off_chain=&fullstack=&infra=a,b&devnet=&formal_methods=&network=&nix=&name=` → `{ "files": [ … ] }`, computed by the **real `scaffold::planner`** (no duplicated logic). Invalid input → `{ "error": "…" }` with 4xx. A non-empty `fullstack=X` pushes both on-chain + off-chain assignments for `X` (mirrors the CLI sugar), so the preview shows the collapsed `protocol/` tree.
 
 The command-string the UI emits, and the previewed tree, must equal what the CLI produces for the same selection. Hosted-page strategy is **OD-1, open** (ARCHITECTURE §10.2).
 

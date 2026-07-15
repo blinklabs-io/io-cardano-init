@@ -9,6 +9,16 @@
 
 default:
     @just --list
+{%- if has_fullstack %}
+
+# --- Protocol ({{ fullstack.tool_name }}, fullstack: on-chain + off-chain) ---
+# One component produces the blueprint AND builds transactions.
+build-protocol:
+    just -f {{ fullstack.dir }}/Justfile build
+
+test-protocol:
+    just -f {{ fullstack.dir }}/Justfile test
+{%- endif %}
 {%- if has_on_chain %}
 
 # --- On-chain ({{ on_chain.tool_name }}) ---
@@ -52,14 +62,17 @@ verify:
 
 # --- Aggregate tasks ---
 build:
+{%- if has_fullstack %} build-protocol{% endif %}
 {%- if has_on_chain %} build-on-chain{% endif %}
 {%- if has_off_chain %} build-off-chain{% endif %}
 {%- if has_infra %} build-infra{% endif %}
     @echo '{{ "{{BOLD + GREEN}}✓ Build complete{{NORMAL}}" }}'
 
-# Build the on-chain blueprint first (consumers read ../blueprint/plutus.json),
-# then run each component's tests in role order.
+# Build the blueprint first (consumers read ../blueprint/plutus.json), then run
+# each component's tests in role order. A fullstack `protocol` component is the
+# blueprint producer, so it builds and tests first.
 test:
+{%- if has_fullstack %} build-protocol test-protocol{% endif %}
 {%- if has_on_chain %} build-on-chain test-on-chain{% endif %}
 {%- if has_off_chain %} test-off-chain{% endif %}
 {%- if has_infra %} test-infra{% endif %}
@@ -68,6 +81,9 @@ test:
     @echo '{{ "{{BOLD + BLACK + BG_GREEN}}  ✓  All tests passed  {{NORMAL}}" }}'
 
 clean:
+{%- if has_fullstack %}
+    just -f {{ fullstack.dir }}/Justfile clean
+{%- endif %}
 {%- if has_on_chain %}
     just -f {{ on_chain.dir }}/Justfile clean
 {%- endif %}

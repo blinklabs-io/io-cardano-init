@@ -163,6 +163,12 @@ pub struct ToolDef {
     /// Infrastructure config. Required when the tool fills the infrastructure
     /// role (validated at load), `None` otherwise.
     pub infra: Option<InfraConfig>,
+    /// Unified on-chain + off-chain template. When present (and the tool fills
+    /// both roles), assigning this tool to both collapses into a single
+    /// `protocol/` component built from this template instead of two folders.
+    /// `Some` requires both `Role::OnChain` and `Role::OffChain` (validated at
+    /// load); `protocol` is a fused component, not a `Role`.
+    pub fullstack: Option<RoleConfig>,
 }
 
 // ---------------------------------------------------------------------------

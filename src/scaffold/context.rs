@@ -50,6 +50,10 @@ pub struct TemplateContext {
     pub has_infra: bool,
     pub has_devnet: bool,
     pub has_formal_methods: bool,
+    /// True when a single tool fills both on-chain and off-chain and they collapse
+    /// into one `protocol/` component (TECH_SPEC §3.4). When true, `has_on_chain`
+    /// and `has_off_chain` are false (the two roles are represented by `fullstack`).
+    pub has_fullstack: bool,
 
     /// True when the `blueprint/` directory is scaffolded: any non-infrastructure
     /// role is present (i.e. the project is not infrastructure-only). Mirrors the
@@ -58,6 +62,10 @@ pub struct TemplateContext {
 
     pub on_chain: Option<RoleContext>,
     pub off_chain: Option<RoleContext>,
+    /// The fused on-chain+off-chain component (`dir = "protocol"`). `Some` only
+    /// when one tool fills both roles and declares a `[fullstack]` template; then
+    /// `on_chain`/`off_chain` are `None`.
+    pub fullstack: Option<RoleContext>,
     pub infra_tools: Vec<InfraToolContext>,
     pub devnet: Option<RoleContext>,
     pub formal_methods: Option<RoleContext>,
@@ -98,10 +106,16 @@ pub fn build_context(
 ) -> Result<TemplateContext, ScaffoldError> {
     let mut on_chain = None;
     let mut off_chain = None;
+    let mut fullstack = None;
     let mut infra_tools = Vec::new();
     let mut devnet = None;
     let mut formal_methods = None;
     let mut nix_packages = Vec::new();
+
+    // When one tool fills both on-chain and off-chain via a `[fullstack]` template,
+    // the two collapse into a single `protocol/` component. Derived here (and in
+    // the planner) from the same shared helper so context and plan agree.
+    let fullstack_id = super::planner::fullstack_tool_id(selection, registry);
 
     for assignment in &selection.assignments {
         let tool =
@@ -137,6 +151,24 @@ pub fn build_context(
                 cardano_up_package: infra.cardano_up_package.clone(),
                 env: infra.env.clone(),
             });
+            continue;
+        }
+
+        // Fullstack collapse: the on-chain + off-chain assignments of this tool
+        // become one `protocol/` component. Build its RoleContext once (on the
+        // on-chain assignment); the off-chain half adds nothing further (its
+        // nix_packages were already unioned above).
+        if fullstack_id.as_deref() == Some(assignment.tool_id.as_str())
+            && matches!(assignment.role, Role::OnChain | Role::OffChain)
+        {
+            if assignment.role == Role::OnChain {
+                fullstack = Some(RoleContext {
+                    tool_id: tool.id.clone(),
+                    tool_name: tool.name.clone(),
+                    language: tool.languages.first().cloned().unwrap_or_default(),
+                    dir: contract::DIR_PROTOCOL.to_string(),
+                });
+            }
             continue;
         }
 
@@ -203,14 +235,17 @@ pub fn build_context(
         has_infra: !infra_tools.is_empty(),
         has_devnet: devnet.is_some(),
         has_formal_methods: formal_methods.is_some(),
+        has_fullstack: fullstack.is_some(),
 
         has_blueprint: on_chain.is_some()
             || off_chain.is_some()
+            || fullstack.is_some()
             || devnet.is_some()
             || formal_methods.is_some(),
 
         on_chain,
         off_chain,
+        fullstack,
         infra_tools,
         devnet,
         formal_methods,
@@ -274,6 +309,35 @@ mod tests {
         assert_eq!(ctx.on_chain.as_ref().unwrap().tool_id, "aiken");
         assert_eq!(ctx.off_chain.as_ref().unwrap().tool_id, "meshjs");
         assert_eq!(ctx.devnet.as_ref().unwrap().tool_id, "yaci");
+    }
+
+    #[test]
+    fn context_fullstack_collapses_roles() {
+        // Scalus on both roles + [fullstack] template → the context represents one
+        // `protocol` component, not separate on-chain/off-chain contexts.
+        let sel = selection(vec![
+            RoleAssignment {
+                role: Role::OnChain,
+                tool_id: "scalus".into(),
+            },
+            RoleAssignment {
+                role: Role::OffChain,
+                tool_id: "scalus".into(),
+            },
+        ]);
+        let ctx = build_context(&sel, &registry()).unwrap();
+
+        assert!(ctx.has_fullstack);
+        assert!(!ctx.has_on_chain);
+        assert!(!ctx.has_off_chain);
+        assert!(ctx.on_chain.is_none());
+        assert!(ctx.off_chain.is_none());
+        let fs = ctx.fullstack.as_ref().expect("fullstack context");
+        assert_eq!(fs.tool_id, "scalus");
+        assert_eq!(fs.dir, "protocol");
+        assert_eq!(fs.language, "scala");
+        // Protocol is a blueprint producer/consumer, so the dir is present.
+        assert!(ctx.has_blueprint);
     }
 
     #[test]

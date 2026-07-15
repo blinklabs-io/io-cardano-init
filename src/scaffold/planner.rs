@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::{ScaffoldError, TemplateAssets};
+use crate::contract;
 use crate::registry::loader::Registry;
 use crate::registry::types::{Role, RoleAssignment, Selection};
 
@@ -121,6 +122,30 @@ pub(crate) fn blueprint_dir_present(selection: &Selection) -> bool {
         .any(|a| a.role != Role::Infrastructure)
 }
 
+/// The tool id that fills **both** on-chain and off-chain as a single fullstack
+/// component, if any. Returns `Some(tool_id)` only when one tool is assigned to
+/// both `Role::OnChain` and `Role::OffChain` **and** declares a `[fullstack]`
+/// template; in that case the two assignments collapse into one `protocol/`
+/// component (TECH_SPEC §3.4, §6.1). Same tool for both roles with no
+/// `[fullstack]` template returns `None` (falls back to two folders).
+///
+/// Shared by the context builder and the planner so both agree on the collapse.
+pub(crate) fn fullstack_tool_id(selection: &Selection, registry: &Registry) -> Option<String> {
+    let on_chain = selection
+        .assignments
+        .iter()
+        .find(|a| a.role == Role::OnChain)?;
+    let off_chain = selection
+        .assignments
+        .iter()
+        .find(|a| a.role == Role::OffChain)?;
+    if on_chain.tool_id != off_chain.tool_id {
+        return None;
+    }
+    let tool = registry.get(&on_chain.tool_id)?;
+    tool.fullstack.as_ref().map(|_| on_chain.tool_id.clone())
+}
+
 /// Build a `FilePlan` from a `Selection` and the tool `Registry`.
 ///
 /// This determines every file that will be written during scaffolding.
@@ -173,6 +198,12 @@ pub fn plan(selection: &Selection, registry: &Registry) -> Result<FilePlan, Scaf
         ai.cmp(&bi).then_with(|| a.tool_id.cmp(&b.tool_id))
     });
 
+    // Fullstack collapse: when one tool fills both on-chain and off-chain and
+    // declares a `[fullstack]` template, the two assignments emit a single
+    // `protocol/` component (TECH_SPEC §6.1), emitted once on the on-chain
+    // assignment (which sorts first) with the off-chain assignment skipped.
+    let fullstack_id = fullstack_tool_id(selection, registry);
+
     // Infrastructure aggregates into a single component: all selected infra tools
     // share one driver template (`_infra/cardano-up`) emitted once at `infra/`,
     // rendered over the full set via `TemplateContext.infra_tools`. The shared
@@ -189,39 +220,61 @@ pub fn plan(selection: &Selection, registry: &Registry) -> Result<FilePlan, Scaf
                     tool_id: assignment.tool_id.clone(),
                 })?;
 
-        let role_config =
-            tool.roles
-                .get(&assignment.role)
-                .ok_or_else(|| ScaffoldError::RoleMismatch {
-                    tool_id: assignment.tool_id.clone(),
-                    role: assignment.role.to_string(),
-                })?;
+        let is_fullstack_member = fullstack_id.as_deref() == Some(assignment.tool_id.as_str())
+            && matches!(assignment.role, Role::OnChain | Role::OffChain);
 
-        let template_path = &role_config.template; // e.g., "aiken/on-chain"
-        let role_dir = assignment.role.dir(); // e.g., "on-chain"
-
-        let dest_prefix = if assignment.role == Role::Infrastructure {
-            // All infra tools must resolve to the same shared driver template.
-            match &infra_template {
-                Some(first) => {
-                    if first != template_path {
-                        return Err(ScaffoldError::InfraTemplateMismatch {
-                            tool_id: assignment.tool_id.clone(),
-                            template: template_path.clone(),
-                            expected: first.clone(),
-                        });
-                    }
-                    // Already emitted the aggregated component; skip duplicates.
+        // Resolve (template path, destination dir) for this assignment. Fullstack
+        // and Infrastructure aggregate; every other role is one-tool-one-dir.
+        let (template_path, dest_prefix): (String, PathBuf) =
+            if is_fullstack_member {
+                // Emit the aggregated protocol/ component once (on the on-chain
+                // assignment); skip the off-chain half.
+                if assignment.role == Role::OffChain {
                     continue;
                 }
-                None => {
-                    infra_template = Some(template_path.clone());
-                    PathBuf::from(role_dir)
+                let fs = tool
+                    .fullstack
+                    .as_ref()
+                    .expect("fullstack_tool_id guarantees a [fullstack] template");
+                (fs.template.clone(), PathBuf::from(contract::DIR_PROTOCOL))
+            } else if assignment.role == Role::Infrastructure {
+                let role_config = tool.roles.get(&assignment.role).ok_or_else(|| {
+                    ScaffoldError::RoleMismatch {
+                        tool_id: assignment.tool_id.clone(),
+                        role: assignment.role.to_string(),
+                    }
+                })?;
+                let template_path = role_config.template.clone();
+                // All infra tools must resolve to the same shared driver template.
+                match &infra_template {
+                    Some(first) => {
+                        if *first != template_path {
+                            return Err(ScaffoldError::InfraTemplateMismatch {
+                                tool_id: assignment.tool_id.clone(),
+                                template: template_path,
+                                expected: first.clone(),
+                            });
+                        }
+                        // Already emitted the aggregated component; skip duplicates.
+                        continue;
+                    }
+                    None => {
+                        infra_template = Some(template_path.clone());
+                        (template_path, PathBuf::from(assignment.role.dir()))
+                    }
                 }
-            }
-        } else {
-            PathBuf::from(role_dir)
-        };
+            } else {
+                let role_config = tool.roles.get(&assignment.role).ok_or_else(|| {
+                    ScaffoldError::RoleMismatch {
+                        tool_id: assignment.tool_id.clone(),
+                        role: assignment.role.to_string(),
+                    }
+                })?;
+                (
+                    role_config.template.clone(),
+                    PathBuf::from(assignment.role.dir()),
+                )
+            };
 
         // Read the manifest
         let manifest_key = format!("{template_path}/manifest.toml");
@@ -496,6 +549,80 @@ mod tests {
     }
 
     #[test]
+    fn fullstack_collapses_into_single_protocol_component() {
+        // Scalus fills both on-chain and off-chain and declares a [fullstack]
+        // template, so the two assignments emit ONE protocol/ component — no
+        // on-chain/ or off-chain/ directories.
+        let sel = selection(vec![
+            RoleAssignment {
+                role: Role::OnChain,
+                tool_id: "scalus".into(),
+            },
+            RoleAssignment {
+                role: Role::OffChain,
+                tool_id: "scalus".into(),
+            },
+        ]);
+        let plan = plan(&sel, &registry()).unwrap();
+        let dests: Vec<String> = plan
+            .entries
+            .iter()
+            .map(|e| e.dest.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(dests.contains(&"protocol/Justfile".to_string()));
+        assert!(dests.contains(&"protocol/src/Validator.scala".to_string()));
+        assert!(dests.contains(&"protocol/src/Main.scala".to_string()));
+        // The protocol Justfile is emitted exactly once (not once per role).
+        assert_eq!(
+            dests.iter().filter(|d| *d == "protocol/Justfile").count(),
+            1
+        );
+        // No separate role directories.
+        assert!(!dests.iter().any(|d| d.starts_with("on-chain/")));
+        assert!(!dests.iter().any(|d| d.starts_with("off-chain/")));
+        // Blueprint dir is still present (protocol is a producer/consumer).
+        assert!(dests.contains(&"blueprint/.gitkeep".to_string()));
+    }
+
+    #[test]
+    fn fullstack_tool_id_detects_the_pair() {
+        let reg = registry();
+        // Same tool on both roles + [fullstack] template → collapse.
+        let both = selection(vec![
+            RoleAssignment {
+                role: Role::OnChain,
+                tool_id: "scalus".into(),
+            },
+            RoleAssignment {
+                role: Role::OffChain,
+                tool_id: "scalus".into(),
+            },
+        ]);
+        assert_eq!(fullstack_tool_id(&both, &reg).as_deref(), Some("scalus"));
+
+        // Different tools per role → no collapse.
+        let mixed = selection(vec![
+            RoleAssignment {
+                role: Role::OnChain,
+                tool_id: "aiken".into(),
+            },
+            RoleAssignment {
+                role: Role::OffChain,
+                tool_id: "meshjs".into(),
+            },
+        ]);
+        assert_eq!(fullstack_tool_id(&mixed, &reg), None);
+
+        // Only one role → no collapse.
+        let single = selection(vec![RoleAssignment {
+            role: Role::OnChain,
+            tool_id: "scalus".into(),
+        }]);
+        assert_eq!(fullstack_tool_id(&single, &reg), None);
+    }
+
+    #[test]
     fn infra_aggregates_into_single_component() {
         // Multiple --infra providers emit ONE aggregated infra/ component (the
         // shared cardano-up driver), not per-tool infra/<tool>/ subdirs.
@@ -574,8 +701,18 @@ mod tests {
     fn every_registered_template_resolves() {
         let reg = registry();
         for tool in reg.all_tools() {
-            for (role, cfg) in &tool.roles {
-                let manifest_key = format!("{}/manifest.toml", cfg.template);
+            // Check each role template plus the optional fullstack template.
+            let templates = tool
+                .roles
+                .iter()
+                .map(|(role, cfg)| (role.to_string(), &cfg.template))
+                .chain(
+                    tool.fullstack
+                        .iter()
+                        .map(|cfg| ("fullstack".to_string(), &cfg.template)),
+                );
+            for (role, template) in templates {
+                let manifest_key = format!("{template}/manifest.toml");
                 let data = TemplateAssets::get(&manifest_key).unwrap_or_else(|| {
                     panic!(
                         "tool '{}' role '{}' points at missing manifest '{}'",
@@ -587,7 +724,7 @@ mod tests {
                     .unwrap_or_else(|e| panic!("manifest '{manifest_key}' failed to parse: {e}"));
 
                 for file in &manifest.files {
-                    let source_key = format!("{}/{}", cfg.template, file.source);
+                    let source_key = format!("{}/{}", template, file.source);
                     assert!(
                         TemplateAssets::get(&source_key).is_some(),
                         "tool '{}' manifest '{}' references missing source '{}'",

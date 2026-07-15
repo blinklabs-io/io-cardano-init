@@ -106,6 +106,7 @@ pub enum Role { OnChain, OffChain, Infrastructure, Devnet, FormalMethods }
 - Each role maps to a kebab string (`on-chain`, `formal-methods`, …) for TOML/flags, a `Display` name for humans, and a contract directory (`dir()` → §4).
 - **The enum is the sole source of truth for the role vocabulary: roles are *not* defined by the repository data.** A tool's `[roles.<kebab>]` blocks merely *reference* existing roles; the registry cannot introduce a new one. Role strings are validated against the enum at load time via `Role::from_kebab` (an unknown role → `RegistryError::UnknownRole`). What the registry data determines is which *tools* exist and which of these fixed roles each can fill, not the set of roles itself.
 - Adding a role is therefore a deliberate code change touching every site that names roles: a new `Role` variant + `Role::ALL` + `from_kebab`/`as_kebab`/`dir()`/`Display`, a `contract::DIR_*` constant, `TemplateContext` handling, a CLI flag, and the web query params. Adding a *tool*, by contrast, is pure data. The role set is small and grows rarely.
+- The **fullstack `protocol/`** component (§3.2) is a related but distinct kind of code change: it adds a `contract::DIR_PROTOCOL` constant and `TemplateContext` handling, but **no** `Role` variant — it is a *fused component* derived from two existing roles, not a sixth role. New fullstack *tools* remain pure data (a `[fullstack]` table + a template dir).
 
 ### 3.2 Tools
 
@@ -115,11 +116,14 @@ pub struct ToolDef {
     pub languages: Vec<String>,
     pub nix_packages: Vec<String>,         // toolchains for the Nix dev shell
     pub roles: HashMap<Role, RoleConfig>,  // which roles this tool can fill
+    pub fullstack: Option<RoleConfig>,     // unified on-chain+off-chain template (opt-in)
 }
 pub struct RoleConfig { pub template: String }  // path under templates/
 ```
 
 `system_deps` is declared in the tool TOML and consumed by the **doctor** (§8). One tool can fill multiple roles (e.g. Scalus: on-chain + off-chain), each with its own template path.
+
+**Fullstack tools.** A tool that fills both on-chain and off-chain may also declare a `[fullstack]` template. When the *same* tool fills both roles, the two collapse into one **fused `protocol/` component** (built from `fullstack.template`) instead of two folders — the value of a same-language stack (shared types, one build, no `plutus.json` round-trip between the halves). This is a tool *capability*, **not a new role**: `protocol` has no `Role` variant and `Role::ALL` stays at five; the collapse is *derived* from the selection at planning time, mirroring the infrastructure aggregation (§6.2). The `protocol/` component still conforms to the interface contract — its `build` writes the blueprint and it reads/writes `.env` — so it composes with every other role like a normal on-chain producer (§4).
 
 ### 3.3 Selection (the resolved user choice)
 
@@ -157,9 +161,15 @@ The contract is a set of constants every template conforms to. It is the seam th
 pub const BLUEPRINT_PATH: &str = "blueprint/plutus.json";
 pub const DIR_ON_CHAIN = "on-chain"; DIR_OFF_CHAIN = "off-chain";
 pub const DIR_INFRA = "infra"; DIR_DEVNET = "devnet"; DIR_FORMAL_METHODS = "formal-methods";
+pub const DIR_PROTOCOL = "protocol";   // fused on-chain+off-chain component (fullstack, §3.2)
 pub const ENV_INDEXER_URL = "INDEXER_URL"; ENV_INDEXER_PORT = "INDEXER_PORT";
 pub const ENV_NODE_SOCKET_PATH = "NODE_SOCKET_PATH"; ENV_NETWORK = "CARDANO_NETWORK";
 ```
+
+`DIR_PROTOCOL` is the one directory not backed by a `Role` (§3.2): a fullstack tool's fused
+component. Its `build` still produces `BLUEPRINT_PATH` — it is the on-chain producer for its
+project — so it is a full contract citizen; fullstack only privatizes the *internal*
+on-chain↔off-chain link between its two halves.
 
 **Compliance checklist (enforced mechanically by contract-compliance tests):**
 
@@ -225,7 +235,10 @@ Walks `selection.assignments`, resolves each tool against the registry, and buil
 Produces the ordered `FilePlan`:
 1. **Base layer** (always): `Justfile`, `README.md`, `.gitignore`, `.env`.
 2. **Blueprint dir**: `blueprint/.gitkeep`, emitted whenever the selection includes any blueprint-producing-or-consuming role: i.e., any role **except** infrastructure (equivalently: present unless the project is infrastructure-only).
-3. **Role layers**: for each assignment, read the template's `manifest.toml` and add its files. **Infrastructure is special — it aggregates**: all selected infra tools share one driver template (`_infra/cardano-up`) emitted **once** at `infra/`, rendered over the full set (`TemplateContext.infra_tools`). This is because the infra engine (`cardano-up`) manages the whole stack as a single unit, not per service. Every other role is one tool → one directory. See `docs/proposals/infra-via-cardano-up.md`.
+3. **Role layers**: for each assignment, read the template's `manifest.toml` and add its files. Two cases aggregate instead of emitting one directory per assignment:
+   - **Fullstack collapses**: when the same tool fills on-chain + off-chain and declares a `[fullstack]` template (§3.2), the two assignments emit **one** `protocol/` component (`fullstack.template`), emitted once on the first of the pair; the second is skipped. `has_fullstack` is set; `has_on_chain`/`has_off_chain` are not.
+   - **Infrastructure is special — it aggregates**: all selected infra tools share one driver template (`_infra/cardano-up`) emitted **once** at `infra/`, rendered over the full set (`TemplateContext.infra_tools`). This is because the infra engine (`cardano-up`) manages the whole stack as a single unit, not per service.
+   Every other role is one tool → one directory.
 4. **Optional layer**: `flake.nix` + `.envrc` when `nix` is set.
 
 No I/O: only embedded assets are read. `render` is set from the `.jinja` extension.
@@ -290,7 +303,7 @@ doctor/
 - **Recipes live in data.** Per-dep recipes are an embedded TOML file (`registry/deps.toml`), keyed by dep id: `binaries` (presence check), `docs` (universal fallback), and an ordered `install` list of `{ installer = arg }` methods. Installer names are validated against the code enum at load (unknown installer → load error, like an unknown `Role`). See §8.1 for why code/data split this way.
 - **Resolver (`resolve`, pure, recursive).** A dep is present if  any of its `binaries` is on `PATH`. For a missing dep, the walk is **two-pass over the ordered `install` methods**: Pass 1 returns the first method whose installer is **detected** (a one-step command); only if none is directly available does Pass 2 walk the methods again and, for the first **bootstrappable** installer, recurse to satisfy one of its `bootstrap` deps and prepend those steps. The result is an ordered, possibly multi-step **plan** (e.g. `aiken` missing with no `nix`/`aikup` → install `aikup` via `npm`, then `aikup install latest`). Two passes — rather than bootstrapping each method before trying later ones — are exactly why the `nix` path needs no `aikup` when `nix` is present (a single method is still chosen per dep). Cycle detection guards the walk; `docs` is the fallback when nothing resolves (advice never empty, FR-20). Version constraints are out of scope for v1 (presence only); doctor output is **host-dependent by design** (not part of the byte-identical generation contract). Full algorithm in TECH_SPEC §9.4.
 - **Infrastructure deps** install via `cardano-up` (the `CardanoUp` installer); `cardano-up` is itself a dep in `registry/deps.toml` (bootstrappable via its own installer methods). Auto-installing it arrives with the DX.05 install command; bootstrapping `cardano-up` when absent may follow post-RC (ROADMAP).
-- **Project scan (no metadata file).** The standalone doctor derives its target set by scanning the cwd: each contract role directory present is matched against the `detect` signatures of the tools that fill that role; an identified tool contributes its `system_deps`, and an unmatched directory is reported as *unrecognized*. Signatures are tool-author **data** in `registry/tools/<tool>.toml` (`detect = [...]`), either a bare path (existence) or `{ file, contains }` (content) — the content form keeps generic filenames like `package.json` from mislabeling foreign projects without claiming to validate viability. Full algorithm + schema in TECH_SPEC §9.6.
+- **Project scan (no metadata file).** The standalone doctor derives its target set by scanning the cwd: each contract role directory present is matched against the `detect` signatures of the tools that fill that role; an identified tool contributes its `system_deps`, and an unmatched directory is reported as *unrecognized*. A **`protocol/`** directory (the fullstack fused component, §3.2) is scanned by a dedicated branch against the tools that declare a `[fullstack]` template; the identified tool is a real registry tool, so its `system_deps` feed the required set through the normal `registry.get` path (unlike the synthetic infra driver). Signatures are tool-author **data** in `registry/tools/<tool>.toml` (`detect = [...]`), either a bare path (existence) or `{ file, contains }` (content) — the content form keeps generic filenames like `package.json` from mislabeling foreign projects without claiming to validate viability. Full algorithm + schema in TECH_SPEC §9.6.
 - **Boundary:** `mod.rs`/`installers.rs`/`catalog.rs` are pure and unit-tested with synthetic `Environment`s; only `probe.rs` touches the system (PATH/OS probes + the project scan). `doctor` depends on `registry`/`contract`, never on `cli`.
 
 ### 8.1 The code/data split

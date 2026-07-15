@@ -29,6 +29,10 @@ pub struct ToolView {
     pub website: String,
     pub languages: Vec<String>,
     pub roles: Vec<String>,
+    /// `true` when the tool declares a `[fullstack]` template, i.e. it can fill
+    /// on-chain + off-chain as one `protocol/` component (`--fullstack <tool>`).
+    /// A capability, not a role — never appears in `roles`.
+    pub fullstack: bool,
 }
 
 /// All roles in canonical (`Role::ALL`) order.
@@ -63,6 +67,7 @@ pub fn tool_views(registry: &Registry) -> Vec<ToolView> {
                 website: tool.website.clone(),
                 languages: tool.languages.clone(),
                 roles,
+                fullstack: tool.fullstack.is_some(),
             }
         })
         .collect();
@@ -123,8 +128,18 @@ mod tests {
         // scalus fills two roles; they must be sorted (off-chain before on-chain).
         let scalus = views.iter().find(|t| t.id == "scalus").unwrap();
         assert_eq!(scalus.roles, vec!["off-chain", "on-chain"]);
+        // scalus declares a [fullstack] template; the capability is surfaced but
+        // never leaks into `roles`.
+        assert!(scalus.fullstack);
+        assert!(
+            !scalus
+                .roles
+                .iter()
+                .any(|r| r == "protocol" || r == "fullstack")
+        );
 
         let aiken = views.iter().find(|t| t.id == "aiken").unwrap();
         assert_eq!(aiken.roles, vec!["on-chain"]);
+        assert!(!aiken.fullstack);
     }
 }
