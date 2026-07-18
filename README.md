@@ -58,6 +58,9 @@ cardano-init
 # One-shot (non-interactive)
 cardano-init --name my-protocol --on-chain aiken --off-chain meshjs --devnet yaci
 
+# Fullstack: one tool for both on-chain and off-chain, as a single `protocol/` component
+cardano-init --name my-protocol --fullstack scalus
+
 # Preview what would be generated, without writing
 cardano-init --name my-protocol --on-chain aiken --dry-run
 
@@ -79,6 +82,9 @@ You choose tools for **roles**. Only the directories for selected roles are crea
 | `devnet` | Local throwaway chain to develop & integration-test against | no |
 | `infrastructure` | Indexers, node providers, chain followers | **yes** |
 | `formal-methods` | Specification & verification | no |
+
+
+**Fullstack tools.** Some tools (e.g. Scalus) implement both on-chain and off-chain in one language. Pick such a tool for both roles — `--fullstack scalus`, or `--on-chain scalus --off-chain scalus` — and instead of two folders you get a single unified **`protocol/`** component (one build, shared types). It still writes the standard `blueprint/plutus.json` and reads `.env`, so it composes with devnet, formal-methods, and infrastructure exactly like a normal on-chain component.
 
 
 ## Status

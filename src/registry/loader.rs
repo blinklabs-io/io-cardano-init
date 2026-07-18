@@ -42,6 +42,12 @@ pub enum RegistryError {
     )]
     InfraConfigMissing { file: String },
 
+    #[error(
+        "tool '{file}' declares a [fullstack] template but must also declare both \
+         [roles.on-chain] and [roles.off-chain]"
+    )]
+    FullstackRolesMissing { file: String },
+
     #[error("no tool definitions found in registry")]
     Empty,
 }
@@ -57,6 +63,8 @@ struct ToolFileToml {
     roles: HashMap<String, RoleConfigToml>,
     #[serde(default)]
     infra: Option<InfraToml>,
+    #[serde(default)]
+    fullstack: Option<RoleConfigToml>,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +165,20 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
             .collect(),
     });
 
+    // A [fullstack] template collapses on-chain + off-chain into one `protocol/`
+    // component, so the tool must be able to fill both roles.
+    if raw.fullstack.is_some()
+        && !(roles.contains_key(&Role::OnChain) && roles.contains_key(&Role::OffChain))
+    {
+        return Err(RegistryError::FullstackRolesMissing {
+            file: file_name.to_string(),
+        });
+    }
+
+    let fullstack = raw.fullstack.map(|f| RoleConfig {
+        template: f.template,
+    });
+
     Ok(ToolDef {
         id: raw.tool.id,
         name: raw.tool.name,
@@ -173,6 +195,7 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
             .collect(),
         roles,
         infra,
+        fullstack,
     })
 }
 
@@ -372,6 +395,64 @@ mod tests {
         assert!(scalus.roles.contains_key(&Role::OnChain));
         assert!(scalus.roles.contains_key(&Role::OffChain));
         assert_eq!(scalus.roles.len(), 2);
+    }
+
+    #[test]
+    fn scalus_declares_fullstack_template() {
+        let reg = registry();
+        let scalus = reg.get("scalus").expect("scalus should exist");
+        let fs = scalus
+            .fullstack
+            .as_ref()
+            .expect("scalus should declare a [fullstack] template");
+        assert_eq!(fs.template, "scalus/fullstack");
+        // Aiken (on-chain only) has no fullstack capability.
+        assert!(reg.get("aiken").unwrap().fullstack.is_none());
+    }
+
+    #[test]
+    fn fullstack_with_both_roles_loads() {
+        let toml = r#"
+            [tool]
+            id = "demo"
+            name = "Demo"
+            description = "d"
+            website = "https://x"
+            languages = ["scala"]
+
+            [roles.on-chain]
+            template = "demo/on-chain"
+            [roles.off-chain]
+            template = "demo/off-chain"
+            [fullstack]
+            template = "demo/fullstack"
+        "#;
+        let raw: ToolFileToml = toml::from_str(toml).unwrap();
+        let def = to_tool_def("demo.toml", raw).expect("valid fullstack tool");
+        assert_eq!(def.fullstack.unwrap().template, "demo/fullstack");
+    }
+
+    #[test]
+    fn fullstack_without_both_roles_is_rejected() {
+        // [fullstack] but only on-chain declared → error (must fill both roles).
+        let toml = r#"
+            [tool]
+            id = "demo"
+            name = "Demo"
+            description = "d"
+            website = "https://x"
+            languages = ["scala"]
+
+            [roles.on-chain]
+            template = "demo/on-chain"
+            [fullstack]
+            template = "demo/fullstack"
+        "#;
+        let raw: ToolFileToml = toml::from_str(toml).unwrap();
+        assert!(matches!(
+            to_tool_def("demo.toml", raw),
+            Err(RegistryError::FullstackRolesMissing { .. })
+        ));
     }
 
     #[test]

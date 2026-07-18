@@ -17,3 +17,9 @@ template = "scalus/on-chain"
 
 [roles.off-chain]
 template = "scalus/off-chain"
+
+# Used when Scalus fills BOTH roles: on-chain + off-chain collapse into one
+# unified `protocol/` component (a single sbt build, shared types) instead of two
+# folders handing off through blueprint/plutus.json.
+[fullstack]
+template = "scalus/fullstack"

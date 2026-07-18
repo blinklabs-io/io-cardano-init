@@ -49,6 +49,28 @@ template = "mytool/on-chain"
 template = "mytool/off-chain"
 ```
 
+### Fullstack tools (one component for both on-chain and off-chain)
+
+If your tool implements **both** on-chain and off-chain in one language and one build (e.g. Scalus), you can offer a **fullstack** experience: add a `[fullstack]` table with a third template. When a user assigns your tool to both roles (`--fullstack mytool`, or `--on-chain mytool --off-chain mytool`), the two collapse into a single unified **`protocol/`** component built from that template, instead of two folders that hand off through `blueprint/plutus.json`.
+
+```toml
+[roles.on-chain]
+template = "mytool/on-chain"    # used when mytool fills on-chain only (e.g. with a different off-chain tool)
+
+[roles.off-chain]
+template = "mytool/off-chain"   # used when mytool fills off-chain only
+
+[fullstack]
+template = "mytool/fullstack"   # used when mytool fills BOTH → one protocol/ component
+```
+
+All three shapes are first-class, so you provide three templates. Rules:
+- `[fullstack]` **requires both** `[roles.on-chain]` and `[roles.off-chain]` (validated at load).
+- `protocol` is **not** a role — you never write `[roles.protocol]`. It is a fused component the CLI derives from the two role assignments.
+- The `protocol/` component must still honor the interface contract (Step 3): its `build` **writes `../blueprint/plutus.json`** and it reads/writes `../.env`, so it composes with devnet/formal/infra like a normal on-chain producer. Internally it may share types between its on-chain and off-chain halves and skip the blueprint round-trip — that private short-cut is the whole point — but the external seam is mandatory.
+- Your tool's `detect` signatures must be present in the fullstack template too, so `doctor` recognizes the tool inside a `protocol/` directory.
+- Adding a fullstack tool is still **pure data** — no Rust changes.
+
 ### Valid role names
 
 | Role key | Description |
@@ -156,6 +178,8 @@ dotenv.config({ path: "../.env" });
 const indexerUrl = process.env.INDEXER_URL; // set → a local endpoint is up
 ```
 
+**Fullstack tools** (a `[fullstack]` template, rendered into `protocol/`) must satisfy the on-chain contract from the fused component: `build` **writes `../blueprint/plutus.json`**, and the component reads/writes `../.env` like an off-chain consumer. Internally it may link its on-chain and off-chain halves directly (shared types, no blueprint round-trip); the blueprint file is written for the *other* roles (devnet/formal/infra), which still consume it. The three mandatory Justfile targets (`build`/`test`/`clean`) apply, and `dev` is optional as usual.
+
 **Tools that provision a local chain endpoint** must write the connection details to `../.env` during `dev`. This applies to **infrastructure** services and, equally, to a **local devnet in the devnet role** (e.g. Yaci DevKit) — the seam is the `.env` keys, not the role. Use the standard variable names:
 
 | Variable | Meaning |
@@ -220,6 +244,7 @@ Any rendered file (one whose `source` ends in `.jinja`) can reference the follow
 {# Flags for conditional sections #}
 {{ has_on_chain }}
 {{ has_off_chain }}
+{{ has_fullstack }}         {# one tool fills both on-chain + off-chain → protocol/ #}
 {{ has_infra }}
 {{ has_devnet }}
 {{ has_formal_methods }}
@@ -234,6 +259,13 @@ Any rendered file (one whose `source` ends in `.jinja`) can reference the follow
 {{ off_chain.tool_name }}
 {{ off_chain.language }}
 {{ off_chain.dir }}         {# "off-chain" #}
+
+{# Fullstack: set instead of on_chain/off_chain when one tool fills both.
+   When has_fullstack is true, has_on_chain and has_off_chain are false. #}
+{{ fullstack.tool_id }}
+{{ fullstack.tool_name }}
+{{ fullstack.language }}
+{{ fullstack.dir }}         {# "protocol" #}
 
 {{ devnet.tool_id }}
 {{ devnet.dir }}            {# "devnet" #}

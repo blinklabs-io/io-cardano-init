@@ -189,6 +189,21 @@ fn build_plan_json(query: &HashMap<String, String>, registry: &Registry) -> Resu
             tool_id: tool_id.clone(),
         });
     }
+    // `fullstack=X` fills both on-chain and off-chain with one tool (mirrors the
+    // CLI sugar); the planner collapses the pair into a single `protocol/`
+    // component when X declares a [fullstack] template.
+    if let Some(tool_id) = query.get("fullstack")
+        && !tool_id.is_empty()
+    {
+        assignments.push(RoleAssignment {
+            role: Role::OnChain,
+            tool_id: tool_id.clone(),
+        });
+        assignments.push(RoleAssignment {
+            role: Role::OffChain,
+            tool_id: tool_id.clone(),
+        });
+    }
     if let Some(infra_str) = query.get("infra") {
         let mut seen = Vec::new();
         for tool_id in infra_str.split(',') {

@@ -69,6 +69,12 @@ pub struct InitArgs {
     #[arg(long, value_name = "TOOL_ID")]
     pub off_chain: Option<String>,
 
+    /// Fullstack tool for both on-chain and off-chain, as one `protocol/`
+    /// component (e.g. scalus). Sugar for --on-chain X --off-chain X; the tool
+    /// must declare a [fullstack] template. Not combinable with --on-chain/--off-chain.
+    #[arg(long, value_name = "TOOL_ID")]
+    pub fullstack: Option<String>,
+
     /// Infrastructure tool (repeatable: --infra kupo --infra ogmios)
     #[arg(long, value_name = "TOOL_ID")]
     pub infra: Vec<String>,
@@ -99,6 +105,7 @@ impl InitArgs {
     fn has_oneshot_flags(&self) -> bool {
         self.on_chain.is_some()
             || self.off_chain.is_some()
+            || self.fullstack.is_some()
             || !self.infra.is_empty()
             || self.devnet.is_some()
             || self.formal_methods.is_some()
@@ -146,6 +153,20 @@ pub enum CliError {
     #[error("no roles selected — at least one role must be provided")]
     NoRolesSelected,
 
+    #[error(
+        "tool '{}' does not support fullstack (no [fullstack] template)",
+        tool_id
+    )]
+    FullstackUnsupported {
+        tool_id: String,
+        valid_tools: Vec<String>,
+    },
+
+    #[error(
+        "--fullstack cannot be combined with --on-chain or --off-chain\n\n  --fullstack X already fills both roles; use it alone."
+    )]
+    FullstackConflict,
+
     #[error("invalid network '{}' — expected preview, preprod, or mainnet", value)]
     InvalidNetwork { value: String },
 
@@ -174,6 +195,8 @@ impl CliError {
             CliError::UnknownTool { .. }
             | CliError::ToolRoleMismatch { .. }
             | CliError::NoRolesSelected
+            | CliError::FullstackUnsupported { .. }
+            | CliError::FullstackConflict
             | CliError::InvalidNetwork { .. }
             | CliError::InvalidProjectName { .. }
             | CliError::NameRequired => 2,
@@ -200,6 +223,8 @@ impl CliError {
             CliError::UnknownTool { .. } => "unknown_tool",
             CliError::ToolRoleMismatch { .. } => "tool_role_mismatch",
             CliError::NoRolesSelected => "no_roles_selected",
+            CliError::FullstackUnsupported { .. } => "fullstack_unsupported",
+            CliError::FullstackConflict => "fullstack_conflict",
             CliError::InvalidNetwork { .. } => "invalid_network",
             CliError::InvalidProjectName { .. } => "invalid_project_name",
             CliError::NameRequired => "name_required",
@@ -230,6 +255,10 @@ impl CliError {
                 role,
                 valid_roles,
             } => json!({ "tool_id": tool_id, "role": role, "valid_roles": valid_roles }),
+            CliError::FullstackUnsupported {
+                tool_id,
+                valid_tools,
+            } => json!({ "tool_id": tool_id, "valid_tools": valid_tools }),
             CliError::InvalidNetwork { value } => {
                 json!({ "value": value, "expected": ["preview", "preprod", "mainnet"] })
             }
@@ -237,6 +266,7 @@ impl CliError {
                 json!({ "name": name, "reason": reason })
             }
             CliError::NoRolesSelected
+            | CliError::FullstackConflict
             | CliError::NameRequired
             | CliError::Aborted
             | CliError::Prompt(_) => json!({}),
@@ -397,12 +427,19 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
         return Err(CliError::NameRequired);
     }
 
+    // `--fullstack X` is sugar for `--on-chain X --off-chain X`; combining it with
+    // an explicit on-chain/off-chain flag is ambiguous (TECH_SPEC §2.2).
+    if args.fullstack.is_some() && (args.on_chain.is_some() || args.off_chain.is_some()) {
+        return Err(CliError::FullstackConflict);
+    }
+
     // Decide mode: one-shot if --name provided, interactive otherwise
     let selection = if let Some(ref name) = args.name {
         oneshot::build_selection(
             name,
             args.on_chain.as_deref(),
             args.off_chain.as_deref(),
+            args.fullstack.as_deref(),
             &args.infra,
             args.devnet.as_deref(),
             args.formal_methods.as_deref(),
@@ -441,7 +478,7 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
 
     // Check-and-advise: resolve the deps this selection needs (TECH_SPEC §9).
     let report = resolve_selection_deps(&selection, registry)?;
-    output::print_success(&selection, &report, format);
+    output::print_success(&selection, registry, &report, format);
 
     Ok(())
 }
@@ -475,6 +512,7 @@ mod tests {
             "demo",
             Some("bogus"),
             None,
+            None,
             &[],
             None,
             None,
@@ -506,6 +544,7 @@ mod tests {
             "demo",
             None,
             Some("aiken"),
+            None,
             &[],
             None,
             None,
@@ -526,6 +565,7 @@ mod tests {
             "demo",
             Some("aiken"),
             None,
+            None,
             &[],
             None,
             None,
@@ -539,6 +579,28 @@ mod tests {
             err.context()["expected"],
             serde_json::json!(["preview", "preprod", "mainnet"])
         );
+    }
+
+    #[test]
+    fn fullstack_conflict_with_explicit_role_flag() {
+        // --fullstack combined with --on-chain is a usage error; caught in
+        // run_init before any generation happens.
+        let registry = Registry::load().unwrap();
+        let args = InitArgs {
+            name: Some("demo".to_string()),
+            on_chain: Some("aiken".to_string()),
+            off_chain: None,
+            fullstack: Some("scalus".to_string()),
+            infra: vec![],
+            devnet: None,
+            formal_methods: None,
+            network: "preview".to_string(),
+            nix: false,
+            dry_run: true,
+        };
+        let err = run_init(args, &registry, Format::Json).unwrap_err();
+        assert_eq!(err.code(), "fullstack_conflict");
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]

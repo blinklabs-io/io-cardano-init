@@ -37,8 +37,9 @@ test-infra:
 build: build-on-chain build-off-chain build-infra
     @echo '{{BOLD + GREEN}}✓ Build complete{{NORMAL}}'
 
-# Build the on-chain blueprint first (consumers read ../blueprint/plutus.json),
-# then run each component's tests in role order.
+# Build the blueprint first (consumers read ../blueprint/plutus.json), then run
+# each component's tests in role order. A fullstack `protocol` component is the
+# blueprint producer, so it builds and tests first.
 test: build-on-chain test-on-chain test-off-chain test-infra
     @echo '{{BOLD + BLACK + BG_GREEN}}  ✓  All tests passed  {{NORMAL}}'
 

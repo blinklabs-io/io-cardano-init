@@ -93,16 +93,10 @@ pub fn print_summary(selection: &Selection, registry: &Registry) {
     println!();
     println!("  Project:  {}", style(&selection.project_name).cyan());
 
-    for assignment in &selection.assignments {
-        let role_label = match assignment.role {
-            Role::OnChain => "On-chain",
-            Role::OffChain => "Off-chain",
-            Role::Infrastructure => "Infra",
-            Role::Devnet => "Devnet",
-            Role::FormalMethods => "Formal methods",
-        };
+    for component in components(selection, registry) {
+        let role_label = component_label(&component.kebab);
 
-        let tool_info = if let Some(tool) = registry.get(&assignment.tool_id) {
+        let tool_info = if let Some(tool) = registry.get(&component.tool_id) {
             // Infra providers carry no user-facing language, so omit the
             // parenthetical rather than printing an empty "(?)".
             match tool.languages.first() {
@@ -110,7 +104,7 @@ pub fn print_summary(selection: &Selection, registry: &Registry) {
                 None => tool.name.clone(),
             }
         } else {
-            assignment.tool_id.clone()
+            component.tool_id.clone()
         };
 
         println!(
@@ -128,12 +122,60 @@ pub fn print_summary(selection: &Selection, registry: &Registry) {
     println!();
 }
 
-/// Build the `[{ role, tool }]` component list for a selection.
-fn components_json(selection: &Selection) -> serde_json::Value {
-    let items: Vec<serde_json::Value> = selection
-        .assignments
+/// A generated component as reported to the user: its role (kebab) and tool id.
+struct Component {
+    /// Role kebab, or `"protocol"` for a collapsed fullstack component.
+    kebab: String,
+    tool_id: String,
+}
+
+/// The components actually scaffolded, with the fullstack on-chain+off-chain pair
+/// folded into a single `protocol` component (matching the generated tree). This
+/// is what the summary and JSON report, so they reflect reality rather than the
+/// two raw assignments.
+fn components(selection: &Selection, registry: &Registry) -> Vec<Component> {
+    let fullstack_id = crate::scaffold::planner::fullstack_tool_id(selection, registry);
+    let mut out = Vec::new();
+    for a in &selection.assignments {
+        let is_fullstack_member = fullstack_id.as_deref() == Some(a.tool_id.as_str())
+            && matches!(a.role, Role::OnChain | Role::OffChain);
+        if is_fullstack_member {
+            // Emit one `protocol` entry (on the on-chain half); skip the off-chain.
+            if a.role == Role::OffChain {
+                continue;
+            }
+            out.push(Component {
+                kebab: crate::contract::DIR_PROTOCOL.to_string(),
+                tool_id: a.tool_id.clone(),
+            });
+            continue;
+        }
+        out.push(Component {
+            kebab: a.role.as_kebab().to_string(),
+            tool_id: a.tool_id.clone(),
+        });
+    }
+    out
+}
+
+/// The human, title-cased label for a component's role kebab (used in summaries).
+fn component_label(kebab: &str) -> &'static str {
+    match kebab {
+        "on-chain" => "On-chain",
+        "off-chain" => "Off-chain",
+        "protocol" => "Protocol",
+        "infrastructure" => "Infra",
+        "devnet" => "Devnet",
+        "formal-methods" => "Formal methods",
+        _ => "Component",
+    }
+}
+
+/// Build the `[{ role, tool }]` component list for a selection (collapse-aware).
+fn components_json(selection: &Selection, registry: &Registry) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = components(selection, registry)
         .iter()
-        .map(|a| json!({ "role": a.role.as_kebab(), "tool": a.tool_id }))
+        .map(|c| json!({ "role": c.kebab, "tool": c.tool_id }))
         .collect();
     serde_json::Value::Array(items)
 }
@@ -153,7 +195,7 @@ pub fn print_dry_run(selection: &Selection, registry: &Registry, plan: &FilePlan
             "nix": selection.nix,
             "dry_run": true,
             "generated": false,
-            "components": components_json(selection),
+            "components": components_json(selection, registry),
             "files": files,
         }));
         return;
@@ -245,14 +287,14 @@ fn print_tree(paths: &[Vec<&str>], depth: usize, _start: usize, indent: &mut Str
 /// Print success after scaffolding, including the dependency check-and-advise
 /// (TECH_SPEC §9). In `json`, emits one envelope carrying the selection plus the
 /// dependency report.
-pub fn print_success(selection: &Selection, report: &Report, format: Format) {
+pub fn print_success(selection: &Selection, registry: &Registry, report: &Report, format: Format) {
     if format == Format::Json {
         emit_json_ok(json!({
             "project": selection.project_name,
             "network": selection.network.to_string(),
             "nix": selection.nix,
             "generated": true,
-            "components": components_json(selection),
+            "components": components_json(selection, registry),
             "dependencies": report,
         }));
         return;
@@ -265,19 +307,12 @@ pub fn print_success(selection: &Selection, report: &Report, format: Format) {
         style(&selection.project_name).cyan().bold()
     );
 
-    for assignment in &selection.assignments {
-        let role_label = match assignment.role {
-            Role::OnChain => "on-chain",
-            Role::OffChain => "off-chain",
-            Role::Infrastructure => "infrastructure",
-            Role::Devnet => "devnet",
-            Role::FormalMethods => "formal-methods",
-        };
+    for component in components(selection, registry) {
         println!(
             "  {} Scaffolded {} ({})",
             style("✔").green().bold(),
-            role_label,
-            assignment.tool_id
+            component.kebab,
+            component.tool_id
         );
     }
 
@@ -423,14 +458,14 @@ pub fn print_doctor(
                 println!(
                     "  {} {}: {}",
                     style("✔").green().bold(),
-                    comp.role,
+                    comp.kind,
                     style(name).cyan()
                 );
             } else {
                 println!(
                     "  {} {}: {} {}",
                     style("✘").red().bold(),
-                    comp.role,
+                    comp.kind,
                     style(name).cyan(),
                     style(format!("(missing: {})", missing.join(", "))).yellow()
                 );

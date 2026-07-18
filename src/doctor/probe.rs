@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use super::catalog::DepCatalog;
 use super::installers::Installer;
+use crate::contract;
 use crate::registry::loader::Registry;
 use crate::registry::types::{DetectSignature, Role};
 
@@ -106,25 +107,52 @@ fn is_on_path(bin: &str) -> bool {
 // Project scan
 // ---------------------------------------------------------------------------
 
-/// A role directory whose contents were recognized as a specific tool.
+/// What a scanned component directory is: one of the five roles, or the fused
+/// fullstack `protocol/` component (which is not a role, TECH_SPEC §3.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentKind {
+    Role(Role),
+    Protocol,
+}
+
+impl ComponentKind {
+    /// The directory / kebab identifier: the role's kebab, or `"protocol"`.
+    pub fn as_kebab(&self) -> &'static str {
+        match self {
+            ComponentKind::Role(role) => role.as_kebab(),
+            ComponentKind::Protocol => contract::DIR_PROTOCOL,
+        }
+    }
+}
+
+impl std::fmt::Display for ComponentKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComponentKind::Role(role) => write!(f, "{role}"),
+            ComponentKind::Protocol => write!(f, "Protocol"),
+        }
+    }
+}
+
+/// A component directory whose contents were recognized as a specific tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct DetectedComponent {
-    #[serde(serialize_with = "ser_role")]
-    pub role: Role,
+    #[serde(rename = "role", serialize_with = "ser_kind")]
+    pub kind: ComponentKind,
     pub tool_id: String,
 }
 
-/// A role directory that exists but whose contents matched no known tool
+/// A component directory that exists but whose contents matched no known tool
 /// (renamed, modified, or a tool not in the registry).
 #[derive(Debug, Clone, Serialize)]
 pub struct UnrecognizedDir {
-    #[serde(serialize_with = "ser_role")]
-    pub role: Role,
+    #[serde(rename = "role", serialize_with = "ser_kind")]
+    pub kind: ComponentKind,
     pub dir: String,
 }
 
-fn ser_role<S: serde::Serializer>(role: &Role, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(role.as_kebab())
+fn ser_kind<S: serde::Serializer>(kind: &ComponentKind, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(kind.as_kebab())
 }
 
 /// The result of scanning a project tree.
@@ -178,12 +206,12 @@ pub fn scan_project(root: &Path, registry: &Registry) -> ScanResult {
         if role == Role::Infrastructure {
             if infra_driver_present(&dir) {
                 components.push(DetectedComponent {
-                    role,
+                    kind: ComponentKind::Role(role),
                     tool_id: super::INFRA_DRIVER_ID.to_string(),
                 });
             } else {
                 unrecognized.push(UnrecognizedDir {
-                    role,
+                    kind: ComponentKind::Role(role),
                     dir: role.dir().to_string(),
                 });
             }
@@ -199,13 +227,44 @@ pub fn scan_project(root: &Path, registry: &Registry) -> ScanResult {
 
         if matched.len() == 1 {
             components.push(DetectedComponent {
-                role,
+                kind: ComponentKind::Role(role),
                 tool_id: matched[0].to_string(),
             });
         } else {
             unrecognized.push(UnrecognizedDir {
-                role,
+                kind: ComponentKind::Role(role),
                 dir: role.dir().to_string(),
+            });
+        }
+    }
+
+    // Fullstack `protocol/` is not a role directory, so it is scanned separately:
+    // matched against the `detect` signatures of tools that declare a `[fullstack]`
+    // template. The identified tool is a real registry tool, so its `system_deps`
+    // feed the required set through the normal path (TECH_SPEC §9.6).
+    let protocol_dir = root.join(contract::DIR_PROTOCOL);
+    if protocol_dir.is_dir() {
+        let matched: Vec<&str> = registry
+            .all_tools()
+            .iter()
+            .filter(|tool| tool.fullstack.is_some())
+            .filter(|tool| {
+                tool.detect
+                    .iter()
+                    .any(|sig| signature_matches(&protocol_dir, sig))
+            })
+            .map(|tool| tool.id.as_str())
+            .collect();
+
+        if matched.len() == 1 {
+            components.push(DetectedComponent {
+                kind: ComponentKind::Protocol,
+                tool_id: matched[0].to_string(),
+            });
+        } else {
+            unrecognized.push(UnrecognizedDir {
+                kind: ComponentKind::Protocol,
+                dir: contract::DIR_PROTOCOL.to_string(),
             });
         }
     }
@@ -254,13 +313,13 @@ mod tests {
         let onchain = result
             .components
             .iter()
-            .find(|c| c.role == Role::OnChain)
+            .find(|c| c.kind == ComponentKind::Role(Role::OnChain))
             .unwrap();
         assert_eq!(onchain.tool_id, "aiken");
         let offchain = result
             .components
             .iter()
-            .find(|c| c.role == Role::OffChain)
+            .find(|c| c.kind == ComponentKind::Role(Role::OffChain))
             .unwrap();
         assert_eq!(offchain.tool_id, "meshjs");
         assert!(result.unrecognized.is_empty());
@@ -282,7 +341,10 @@ mod tests {
         let result = scan_project(root, &registry());
         assert!(result.components.is_empty());
         assert_eq!(result.unrecognized.len(), 1);
-        assert_eq!(result.unrecognized[0].role, Role::OffChain);
+        assert_eq!(
+            result.unrecognized[0].kind,
+            ComponentKind::Role(Role::OffChain)
+        );
     }
 
     #[test]
@@ -297,7 +359,10 @@ mod tests {
         let result = scan_project(root, &registry());
         assert!(result.components.is_empty());
         assert_eq!(result.unrecognized.len(), 1);
-        assert_eq!(result.unrecognized[0].role, Role::OnChain);
+        assert_eq!(
+            result.unrecognized[0].kind,
+            ComponentKind::Role(Role::OnChain)
+        );
     }
 
     #[test]
@@ -311,7 +376,7 @@ mod tests {
         let onchain = result
             .components
             .iter()
-            .find(|c| c.role == Role::OnChain)
+            .find(|c| c.kind == ComponentKind::Role(Role::OnChain))
             .unwrap();
         assert_eq!(onchain.tool_id, "scalus");
     }
@@ -332,7 +397,7 @@ mod tests {
         let infra = result
             .components
             .iter()
-            .find(|c| c.role == Role::Infrastructure)
+            .find(|c| c.kind == ComponentKind::Role(Role::Infrastructure))
             .expect("infra should be detected via the driver marker");
         assert_eq!(infra.tool_id, crate::doctor::INFRA_DRIVER_ID);
         assert!(result.unrecognized.is_empty());
@@ -348,7 +413,43 @@ mod tests {
         let result = scan_project(root, &registry());
         assert!(result.components.is_empty());
         assert_eq!(result.unrecognized.len(), 1);
-        assert_eq!(result.unrecognized[0].role, Role::Infrastructure);
+        assert_eq!(
+            result.unrecognized[0].kind,
+            ComponentKind::Role(Role::Infrastructure)
+        );
+    }
+
+    #[test]
+    fn scan_detects_fullstack_protocol_component() {
+        // A protocol/ dir with scalus's signatures is identified as the scalus
+        // fullstack component (its real system_deps then feed the required set).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("protocol/src")).unwrap();
+        fs::write(root.join("protocol/src/Validator.scala"), "").unwrap();
+        fs::write(root.join("protocol/src/Main.scala"), "").unwrap();
+
+        let result = scan_project(root, &registry());
+        let protocol = result
+            .components
+            .iter()
+            .find(|c| c.kind == ComponentKind::Protocol)
+            .expect("protocol component should be detected");
+        assert_eq!(protocol.tool_id, "scalus");
+        assert!(result.unrecognized.is_empty());
+    }
+
+    #[test]
+    fn scan_protocol_without_signatures_is_unrecognized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("protocol")).unwrap();
+        fs::write(root.join("protocol/whatever.txt"), "").unwrap();
+
+        let result = scan_project(root, &registry());
+        assert!(result.components.is_empty());
+        assert_eq!(result.unrecognized.len(), 1);
+        assert_eq!(result.unrecognized[0].kind, ComponentKind::Protocol);
     }
 
     #[test]

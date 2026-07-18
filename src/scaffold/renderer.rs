@@ -397,9 +397,12 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_scalus_multi_role() {
+    fn snapshot_scalus_fullstack() {
+        // Scalus fills both on-chain and off-chain and declares a [fullstack]
+        // template, so the two collapse into a single `protocol/` component
+        // (no separate on-chain/ or off-chain/). Locks the fullstack collapse.
         assert_snapshot(
-            "scalus_multi_role",
+            "scalus_fullstack",
             &sel(
                 vec![a(Role::OnChain, "scalus"), a(Role::OffChain, "scalus")],
                 Network::Preview,
