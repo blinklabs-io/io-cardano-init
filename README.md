@@ -94,8 +94,8 @@ Early prototype. Tools currently in the registry (✅ available · ⬜ planned).
 | On-chain | Off-chain | Devnet | Infrastructure | Formal methods |
 |----------|-----------|--------|----------------|----------------|
 | ✅ Aiken | ✅ MeshJS | ✅ Yaci DevKit | ✅ Kupo | ⬜ Blaster |
-| ⬜ Scalus | ⬜ Tx3 | | ✅ Ogmios | |
-| ⬜ Plinth | ⬜ Scalus | | ✅ Dolos | |
+| ✅ Scalus | ✅ Scalus | | ✅ Ogmios | |
+| ⬜ Plinth | ⬜ Tx3  | | ✅ Dolos | |
 | ⬜ Pebble | ⬜ Lucid Evolution | | ✅ Tx Submit API | |
 | ⬜ Plutarch | ⬜ Evolution SDK | | ✅ Cardano Node | |
 | ⬜ Opshin | ⬜ Blaze | | ✅ Cardano Node API | |

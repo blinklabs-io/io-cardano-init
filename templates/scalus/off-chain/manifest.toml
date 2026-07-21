@@ -1,10 +1,70 @@
 [manifest]
-summary = "Scalus off-chain transaction building (placeholder — not yet implemented)"
+summary = "Scalus off-chain project: builds/submits mint & burn transactions for the minting policy (Scala 3 + TxBuilder), consuming ../blueprint/plutus.json"
 
 [[files]]
 source = "Justfile.jinja"
 dest = "Justfile"
 
 [[files]]
-source = "src/Main.scala"
-dest = "src/Main.scala"
+source = "build.sbt.jinja"
+dest = "build.sbt"
+
+[[files]]
+source = ".env.example"
+dest = ".env.example"
+
+[[files]]
+source = ".gitignore"
+dest = ".gitignore"
+
+[[files]]
+source = "project/plugins.sbt"
+dest = "project/plugins.sbt"
+
+[[files]]
+source = "project/build.properties"
+dest = "project/build.properties"
+
+[[files]]
+source = "src/main/scala/app/MintingPolicy.scala"
+dest = "src/main/scala/app/MintingPolicy.scala"
+
+[[files]]
+source = "src/main/scala/app/MintingPolicyContract.scala"
+dest = "src/main/scala/app/MintingPolicyContract.scala"
+
+[[files]]
+source = "src/main/scala/app/Transactions.scala"
+dest = "src/main/scala/app/Transactions.scala"
+
+[[files]]
+source = "src/main/scala/app/Server.scala"
+dest = "src/main/scala/app/Server.scala"
+
+[[files]]
+source = "src/main/scala/app/Logging.scala"
+dest = "src/main/scala/app/Logging.scala"
+
+[[files]]
+source = "src/main/scala/app/DotEnv.scala"
+dest = "src/main/scala/app/DotEnv.scala"
+
+[[files]]
+source = "src/main/scala/app/Main.scala"
+dest = "src/main/scala/app/Main.scala"
+
+[[files]]
+source = "src/test/scala/app/MintingPolicyTest.scala"
+dest = "src/test/scala/app/MintingPolicyTest.scala"
+
+[[files]]
+source = "src/test/scala/app/EmulatorTest.scala"
+dest = "src/test/scala/app/EmulatorTest.scala"
+
+[[files]]
+source = "src/test/scala/app/TransactionsTestBase.scala"
+dest = "src/test/scala/app/TransactionsTestBase.scala"
+
+[[files]]
+source = "src/test/scala/app/TransactionsEmulatorTest.scala"
+dest = "src/test/scala/app/TransactionsEmulatorTest.scala"

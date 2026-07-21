@@ -1,12 +1,19 @@
-# On-chain component (Scalus) — PLACEHOLDER
+# On-chain component (Scalus)
 # Part of {{ project_name }}
+#
+# A Plutus V3 minting policy written in Scala 3. The Scalus compiler plugin
+# compiles it to Untyped Plutus Core (UPLC); `build` then writes the CIP-57
+# blueprint to ../{{ blueprint_path }} for the off-chain / devnet / formal
+# components to consume.
 
+# Compile the validator and write the CIP-57 blueprint to ../{{ blueprint_path }}.
 build:
-    @echo "Scalus on-chain is a placeholder — not yet implemented."
-    @echo "When implemented, it compiles Scala to UPLC and writes ../{{ blueprint_path }}."
+    sbt "runMain app.genBlueprint ../{{ blueprint_path }}"
 
+# Unit tests: run the validator as a Scala function AND as a compiled Plutus
+# script on the built-in evaluator — no blockchain, milliseconds per test.
 test:
-    @echo "Scalus on-chain tests are a placeholder — not yet implemented."
+    sbt test
 
 clean:
-    @echo "Nothing to clean (Scalus placeholder)."
+    sbt clean
