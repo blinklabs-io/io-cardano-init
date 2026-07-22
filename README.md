@@ -4,9 +4,27 @@
 [![Code Quality](https://github.com/input-output-hk/cardano-init/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/input-output-hk/cardano-init/actions/workflows/github-code-scanning/codeql)
 [![Scheduled Smoke](https://github.com/input-output-hk/cardano-init/actions/workflows/scheduled-smoke.yml/badge.svg)](https://github.com/input-output-hk/cardano-init/actions/workflows/scheduled-smoke.yml)
 
-Scaffold a complete, runnable **Cardano protocol project** in seconds. Pick a tool for each role you need (e.g., on-chain, off-chain, infrastructure, devnet, formal-methods) and `cardano-init` generates a monorepo where every component is already wired together and a small end-to-end example that builds and passes its tests out of the box.
+**Go from zero to a running Cardano protocol in one command.**
+
+Pick a tool for each role you need (on-chain, off-chain, devnet, infrastructure, formal-methods) and `cardano-init` generates a monorepo where every component is already wired together, plus a small end-to-end example that **builds and passes its tests out of the box**.
 
 Built for newcomers and coding agents alike.
+
+```console
+$ cardano-init --name my-protocol --on-chain aiken --off-chain meshjs --devnet yaci
+
+my-protocol/
+├── on-chain/     # Aiken validators  →  blueprint/plutus.json
+├── off-chain/    # MeshJS tx building, reads .env
+├── devnet/       # Yaci DevKit local throwaway chain
+├── blueprint/    # shared CIP-57 contract interface
+├── .env          # connection seam between components
+├── Justfile      # just build · just test · just clean
+└── README.md
+
+$ cd my-protocol && just test
+  ✓  All tests passed
+```
 
 > [!WARNING]
 > **Prototype: do not use yet.** This is an early POC under active design; scope, CLI flags, templates, and generated output **will change** without notice. Targeting a working showcase build (DX.02) and a public Release Candidate (DX.05). See the [Roadmap](docs/ROADMAP.md).
@@ -15,9 +33,7 @@ Built for newcomers and coding agents alike.
 
 ### Install
 
-Prebuilt binary (Linux, macOS, Windows — x86_64 and arm64). Once a release is published, grab it
-from the [Releases page](https://github.com/input-output-hk/cardano-init/releases), or use the
-one-line installer:
+The fastest way. No toolchain required (Linux, macOS, Windows · x86_64 and arm64):
 
 ```bash
 # macOS / Linux
@@ -29,17 +45,22 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/input-output-hk/cardano
 irm https://github.com/input-output-hk/cardano-init/releases/latest/download/cardano-init-installer.ps1 | iex
 ```
 
-With Nix (flake):
+Prefer a specific version or a manual download? Grab it from the [Releases page](https://github.com/input-output-hk/cardano-init/releases).
+
+<details>
+<summary><b>With Nix (flake)</b></summary>
 
 ```bash
 # Install the CLI into your profile
 nix profile add github:input-output-hk/cardano-init
 
-# Or run it without installing
+# Or run it once, without installing
 nix run github:input-output-hk/cardano-init -- --help
 ```
+</details>
 
-With Cargo (requires a recent Rust toolchain, 2024 edition):
+<details>
+<summary><b>With Cargo</b> (requires a recent Rust toolchain, 2024 edition)</summary>
 
 ```bash
 # From the published repo
@@ -48,11 +69,12 @@ cargo install --git https://github.com/input-output-hk/cardano-init
 # Or from a clone
 cargo install --path .
 ```
+</details>
 
 ### Usage
 
 ```bash
-# Interactive guided setup
+# Interactive guided setup — the easiest way to start
 cardano-init
 
 # One-shot (non-interactive)
@@ -68,12 +90,11 @@ cardano-init --name my-protocol --on-chain aiken --dry-run
 cardano-init web
 ```
 
-A generated project is driven by [`just`](https://just.systems): `just build`, `just test`, `just dev`, `just clean`.
+Every generated project is driven by [`just`](https://just.systems): `just build`, `just test`, `just clean` (and per-component `just -f <dir>/Justfile dev` where a watch/daemon mode exists). Missing a toolchain? Run the built-in dependency [`doctor`](docs/ROADMAP.md) and it tells you exactly which installer to use.
 
 ## How it works
 
 You choose tools for **roles**. Only the directories for selected roles are created, and a base layer (top-level `Justfile`, README, `.env`, `blueprint/`) wires them together.
-
 
 | Role | What it does | Multiple tools? |
 |------|--------------|-----------------|
@@ -83,9 +104,9 @@ You choose tools for **roles**. Only the directories for selected roles are crea
 | `infrastructure` | Indexers, node providers, chain followers | **yes** |
 | `formal-methods` | Specification & verification | no |
 
+The magic is the **interface contract**: on-chain components always emit `blueprint/plutus.json`, and whatever provisions a local endpoint writes standard vars (like `INDEXER_URL`) into `.env`. Consumers read those and degrade gracefully when blank. Because components talk to the *contract* rather than to each other, mixing and matching tools Just Works.
 
-**Fullstack tools.** Some tools (e.g. Scalus) implement both on-chain and off-chain in one language. Pick such a tool for both roles — `--fullstack scalus`, or `--on-chain scalus --off-chain scalus` — and instead of two folders you get a single unified **`protocol/`** component (one build, shared types). It still writes the standard `blueprint/plutus.json` and reads `.env`, so it composes with devnet, formal-methods, and infrastructure exactly like a normal on-chain component.
-
+**Fullstack tools.** Some tools (e.g. Scalus) implement both on-chain and off-chain in one language. Pick such a tool for both roles (e.g., `--fullstack scalus`, or `--on-chain scalus --off-chain scalus`) and instead of two folders you get a single unified **`protocol/`** component. It still writes the standard `blueprint/plutus.json` and reads `.env`, so it composes with devnet, formal-methods, and infrastructure.
 
 ## Status
 
@@ -94,26 +115,17 @@ Early prototype. Tools currently in the registry (✅ available · ⬜ planned).
 | On-chain | Off-chain | Devnet | Infrastructure | Formal methods |
 |----------|-----------|--------|----------------|----------------|
 | ✅ Aiken | ✅ MeshJS | ✅ Yaci DevKit | ✅ Kupo | ⬜ Blaster |
-| ⬜ Scalus | ⬜ Tx3 | | ✅ Ogmios | |
-| ⬜ Plinth | ⬜ Scalus | | ✅ Dolos | |
+| ✅ Scalus | ✅ Scalus | | ✅ Ogmios | |
+| ⬜ Plinth | ⬜ Tx3  | | ✅ Dolos | |
 | ⬜ Pebble | ⬜ Lucid Evolution | | ✅ Tx Submit API | |
 | ⬜ Plutarch | ⬜ Evolution SDK | | ✅ Cardano Node | |
 | ⬜ Opshin | ⬜ Blaze | | ✅ Cardano Node API | |
 | | ⬜ Elm Cardano | | ✅ Dingo | |
 | | ⬜ PyCardano | | | |
 
-
 ## How it relates to `aikup`, `cardano-up`, and friends
 
-`cardano-init` is a **project scaffolder**, not a version manager or an environment manager. It runs once, generates a wired-together monorepo, and steps out. That makes it complementary to (not a replacement for) the per-tool installers in the ecosystem:
-
-
-| Tool | Concern | Lifetime |
-|------|---------|----------|
-| **`cardano-init`** | Generates a multi-tool protocol project, with every role wired together | One-shot, at project creation |
-| **`aikup`** | Installs & pins the Aiken toolchain (like `rustup` for Aiken) | Ongoing, per developer machine |
-| **`cardano-up`** | Provisions & runs Cardano infrastructure (node, indexers, devnets) | Ongoing, per environment |
-
+`cardano-init` is a **project scaffolder**, not a version manager or an environment manager. It runs once, generates a wired-together monorepo, and steps out. That makes it complementary to (not a replacement for) the per-tool installers in the ecosystem.
 
 These sit at different layers: `cardano-init` decides *what tools your project uses and how they compose*, while `aikup` / `cardano-up` install and manage *the toolchains and infrastructure those tools need*. The two meet at the dependency [`doctor`](docs/ROADMAP.md): when toolchains are missing, `cardano-init` advises the right installer (`aikup` for Aiken, `cardano-up` for the infrastructure role) rather than reinventing them.
 
@@ -141,11 +153,14 @@ cardano-init --name my-protocol --off-chain meshjs --infra kupo --infra ogmios
 just -f infra/Justfile dev
 ```
 
-- **They compose**: `cardano-up` resolves shared dependencies (e.g. `cardano-node`) automatically, so combinations work without per-pair wiring.
 - **Dolos and Dingo are self-contained nodes**: No separate `cardano-node`. Each provides its own `NODE_SOCKET_PATH`, and Dingo also serves a Blockfrost-compatible API as `INDEXER_URL`.
 - **One chain-index per project**: `INDEXER_URL` has a single slot, so Kupo and Dingo are alternatives, not additive.
 
-## Documentation
+## User Documentation
+
+So far, this README is the only user docs.
+
+## Development Documentation
 
 
 | Doc | Purpose |
@@ -157,8 +172,6 @@ just -f infra/Justfile dev
 | [docs/ADDING_A_TOOL.md](docs/ADDING_A_TOOL.md) | Contributor guide for integrating a new tool |
 | [docs/RELEASING.md](docs/RELEASING.md) | How to cut a release and publish prebuilt binaries (cargo-dist) |
 
-
-## Development
 
 ```bash
 cargo build       # build
