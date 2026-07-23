@@ -1,0 +1,36 @@
+val scalusVersion = "0.18.2"
+
+resolvers += Resolver.sonatypeCentralSnapshots
+
+// Latest Scala 3 LTS version
+ThisBuild / scalaVersion := "3.3.8"
+
+ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
+
+// Scala 3.3.x LTS still uses sun.misc.Unsafe in LazyVals, which JDK 24+ warns about.
+// Fork tests and allow the deprecated memory-access methods to silence the warning.
+// The flag only exists on JDK 23+, so guard it to avoid breaking older JDKs.
+ThisBuild / Test / fork := true
+ThisBuild / Test / javaOptions ++= {
+    val javaVersion = System.getProperty("java.specification.version").toInt
+    if (javaVersion >= 23) Seq("--sun-misc-unsafe-memory-access=allow") else Seq.empty
+}
+
+// The Scalus compiler plugin turns @Compile-annotated Scala into Plutus Core.
+addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full)
+
+lazy val root = (project in file("."))
+    .enablePlugins(ScalusSbtPlugin)
+    .settings(
+      name := "{{ project_name }}-on-chain",
+      libraryDependencies ++= Seq(
+        "org.scalus" %% "scalus" % scalusVersion,
+        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion
+      ),
+      libraryDependencies ++= Seq(
+        "org.scalus" %% "scalus-testkit" % scalusVersion,
+        "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalacheck" %% "scalacheck" % "1.19.0" % Test
+      )
+    )

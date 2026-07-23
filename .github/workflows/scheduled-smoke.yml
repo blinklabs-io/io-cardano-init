@@ -24,20 +24,38 @@ permissions:
 
 jobs:
   smoke:
-    name: ${{ matrix.tool }} build+test
+    name: ${{ matrix.variant }} build+test
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false # one tool breaking must not mask the others
+      fail-fast: false # one variant breaking must not mask the others
       matrix:
-        # Only the tools that are meant to build green are listed. Placeholders
-        # (scalus, blaster, yaci) are intentionally excluded — their `just`
+        # Only tools that are meant to build green are listed. Remaining
+        # placeholders (blaster, yaci) are intentionally excluded — their `just`
         # targets only echo, so they have no external dependency to drift. Add a
         # tool here the moment its template becomes genuinely build-green.
+        #
+        # `variant` is the unique display/dir key; `tool` selects the toolchain
+        # setup below (one tool can appear as several variants — e.g. Scalus
+        # fills on-chain, off-chain, and the fullstack collapse, each a distinct
+        # template that must build green on its own).
         include:
-          - tool: aiken
+          - variant: aiken
+            tool: aiken
             flags: --on-chain aiken
-          - tool: meshjs
+          - variant: meshjs
+            tool: meshjs
             flags: --off-chain meshjs
+          - variant: scalus-on-chain
+            tool: scalus
+            flags: --on-chain scalus
+          - variant: scalus-off-chain
+            tool: scalus
+            flags: --off-chain scalus
+          - variant: scalus-fullstack
+            tool: scalus
+            # Sugar for `--on-chain scalus --off-chain scalus`: both roles
+            # collapse into one unified `protocol/` sbt build.
+            flags: --fullstack scalus
     steps:
       - uses: actions/checkout@v5
 
@@ -61,11 +79,24 @@ jobs:
         with:
           node-version: 20
 
+      # Scalus templates are Scala 3 / sbt builds: they need a JDK and sbt.
+      - name: Install JDK
+        if: matrix.tool == 'scalus'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Keep in lockstep with templates/scalus/*/project/build.properties
+          # and build.sbt.jinja's declared JDK baseline.
+          java-version: 21
+      - name: Install sbt
+        if: matrix.tool == 'scalus'
+        uses: sbt/setup-sbt@v1
+
       - name: Scaffold project in isolation
-        run: cargo run --quiet -- --name smoke-${{ matrix.tool }} ${{ matrix.flags }}
+        run: cargo run --quiet -- --name smoke-${{ matrix.variant }} ${{ matrix.flags }}
 
       - name: Build & test the generated project
-        working-directory: smoke-${{ matrix.tool }}
+        working-directory: smoke-${{ matrix.variant }}
         # Each component's Justfile installs its own deps (e.g. meshjs `_install`
         # runs `npm install` in off-chain/ on first build), so `just build` is
         # self-sufficient from the project root — no per-tool dep step here.

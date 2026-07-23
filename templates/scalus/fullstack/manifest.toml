@@ -1,14 +1,70 @@
 [manifest]
-summary = "Scalus fullstack project: on-chain validators + off-chain in one build (placeholder — not yet implemented)"
+summary = "Scalus fullstack project: on-chain minting policy + off-chain transaction building in one Scala 3 / sbt build; build writes ../blueprint/plutus.json for the other components"
 
 [[files]]
 source = "Justfile.jinja"
 dest = "Justfile"
 
 [[files]]
-source = "src/Validator.scala"
-dest = "src/Validator.scala"
+source = "build.sbt.jinja"
+dest = "build.sbt"
 
 [[files]]
-source = "src/Main.scala"
-dest = "src/Main.scala"
+source = ".env.example"
+dest = ".env.example"
+
+[[files]]
+source = ".gitignore"
+dest = ".gitignore"
+
+[[files]]
+source = "project/plugins.sbt"
+dest = "project/plugins.sbt"
+
+[[files]]
+source = "project/build.properties"
+dest = "project/build.properties"
+
+[[files]]
+source = "src/main/scala/app/MintingPolicy.scala"
+dest = "src/main/scala/app/MintingPolicy.scala"
+
+[[files]]
+source = "src/main/scala/app/MintingPolicyContract.scala"
+dest = "src/main/scala/app/MintingPolicyContract.scala"
+
+[[files]]
+source = "src/main/scala/app/Transactions.scala"
+dest = "src/main/scala/app/Transactions.scala"
+
+[[files]]
+source = "src/main/scala/app/Server.scala"
+dest = "src/main/scala/app/Server.scala"
+
+[[files]]
+source = "src/main/scala/app/Logging.scala"
+dest = "src/main/scala/app/Logging.scala"
+
+[[files]]
+source = "src/main/scala/app/DotEnv.scala"
+dest = "src/main/scala/app/DotEnv.scala"
+
+[[files]]
+source = "src/main/scala/app/Main.scala"
+dest = "src/main/scala/app/Main.scala"
+
+[[files]]
+source = "src/test/scala/app/MintingPolicyTest.scala"
+dest = "src/test/scala/app/MintingPolicyTest.scala"
+
+[[files]]
+source = "src/test/scala/app/EmulatorTest.scala"
+dest = "src/test/scala/app/EmulatorTest.scala"
+
+[[files]]
+source = "src/test/scala/app/TransactionsTestBase.scala"
+dest = "src/test/scala/app/TransactionsTestBase.scala"
+
+[[files]]
+source = "src/test/scala/app/TransactionsEmulatorTest.scala"
+dest = "src/test/scala/app/TransactionsEmulatorTest.scala"

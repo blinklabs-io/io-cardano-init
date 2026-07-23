@@ -128,47 +128,1050 @@ CARDANO_NODE_API_URL=
 === blueprint/.gitkeep ===
 
 === protocol/Justfile ===
-# Fullstack component (Scalus) — PLACEHOLDER
+# Protocol component (Scalus, fullstack: on-chain + off-chain)
 # Part of snap-project
 #
-# One unified Scala/sbt build for both on-chain validators and off-chain
-# transaction logic. The two halves share types directly (no blueprint round-trip
-# between them), but `build` still writes ../blueprint/plutus.json so the other
-# components (devnet, formal-methods, infra) can consume it.
+# One unified Scala 3 / sbt build for BOTH the on-chain minting policy and the
+# off-chain transaction building. The two halves share types directly (no
+# blueprint round-trip between them) — that shared build is the whole point of
+# the fullstack layout. `build` still writes ../blueprint/plutus.json so the
+# other components (devnet, formal-methods, infra) can consume it.
+#
+# Where transactions go is decided by the shared ../.env (see .env.example):
+#   • INDEXER_URL set (a local devnet, e.g. Yaci DevKit's `just dev`) → that
+#     devnet, with its built-in test wallet. No Blockfrost key needed.
+#   • INDEXER_URL absent → Blockfrost (needs BLOCKFROST_API_KEY + MNEMONIC).
 
+# Compile the Scala sources and write the CIP-57 blueprint to ../blueprint/plutus.json.
 build:
-    @echo "Scalus fullstack is a placeholder — not yet implemented."
-    @echo "When implemented, it compiles the Scala sources and writes ../blueprint/plutus.json."
+    sbt "runMain app.genBlueprint ../blueprint/plutus.json"
 
+# Unit tests on the built-in emulator — no blockchain, milliseconds per test.
 test:
-    @echo "Scalus fullstack tests are a placeholder — not yet implemented."
+    sbt test
+
+# Run the minting REST API against whatever ../.env points at (local devnet or
+# Blockfrost). Swagger UI at http://localhost:8088/docs. Long-running: Ctrl-C.
+dev:
+    sbt "runMain app.start"
 
 clean:
-    @echo "Nothing to clean (Scalus placeholder)."
+    sbt clean
 
-=== protocol/src/Validator.scala ===
-// Scalus on-chain validator (fullstack) — PLACEHOLDER
-// Replace this with your own validator logic.
-//
-// In the fullstack layout this lives alongside the off-chain Main.scala in a
-// single sbt build. `just build` compiles it to UPLC and writes a CIP-57
-// blueprint at ../blueprint/plutus.json for the other components to consume.
+=== protocol/build.sbt ===
+val scalusVersion = "0.18.2"
 
-object Validator {
-  // def validate(datum: Data, redeemer: Data, ctx: Data): Boolean = true
+resolvers += Resolver.sonatypeCentralSnapshots
+
+// Latest Scala 3 LTS version
+ThisBuild / scalaVersion := "3.3.8"
+
+ThisBuild / scalacOptions ++= Seq("-feature", "-deprecation", "-unchecked")
+
+// Scala 3.3.x LTS still uses sun.misc.Unsafe in LazyVals, which JDK 24+ warns about.
+// Fork tests and allow the deprecated memory-access methods to silence the warning.
+// The flag only exists on JDK 23+, so guard it to avoid breaking older JDKs.
+ThisBuild / Test / fork := true
+ThisBuild / Test / javaOptions ++= {
+    val javaVersion = System.getProperty("java.specification.version").toInt
+    if (javaVersion >= 23) Seq("--sun-misc-unsafe-memory-access=allow") else Seq.empty
 }
 
-=== protocol/src/Main.scala ===
-// Scalus off-chain entry point (fullstack) — PLACEHOLDER
-// Replace this with your own transaction-building logic.
-//
-// In the fullstack layout the off-chain code shares the validator types from
-// Validator.scala directly, so it needs no blueprint round-trip to build
-// transactions. It still reads the connection details from ../.env.
+// The Scalus compiler plugin turns @Compile-annotated Scala into Plutus Core.
+addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full)
 
-object Main {
-  def main(args: Array[String]): Unit = {
-    println("Scalus fullstack component (placeholder).")
-  }
+lazy val root = (project in file("."))
+    .enablePlugins(ScalusSbtPlugin)
+    .settings(
+      name := "snap-project",
+      libraryDependencies ++= Seq(
+        // Scalus
+        "org.scalus" %% "scalus" % scalusVersion,
+        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion,
+        // Tapir for the REST API + Swagger UI
+        "com.softwaremill.sttp.tapir" %% "tapir-netty-server-sync" % "1.13.22",
+        "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % "1.13.22",
+        // Logging (scribe is used by Scalus; declared explicitly to configure the format)
+        "com.outr" %% "scribe" % "3.19.0",
+        "org.slf4j" % "slf4j-simple" % "2.0.18"
+      ),
+      libraryDependencies ++= Seq(
+        "org.scalus" %% "scalus-testkit" % scalusVersion,
+        "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalacheck" %% "scalacheck" % "1.19.0" % Test
+      )
+    )
+
+=== protocol/.env.example ===
+# Off-chain secrets for submitting transactions.
+# Copy this file to `.env.local` (gitignored) and fill in the values.
+# CARDANO_NETWORK and the connection details (INDEXER_URL) are read from the
+# shared ../.env.
+
+# Where transactions go is decided by ../.env, not here:
+#   • INDEXER_URL set (a local devnet, e.g. Yaci DevKit's `just dev`) → that
+#     devnet is used with its built-in test wallet, and BLOCKFROST_API_KEY /
+#     MNEMONIC below are NOT needed.
+#   • INDEXER_URL absent → Blockfrost is used and BLOCKFROST_API_KEY + MNEMONIC
+#     below are required.
+
+# Blockfrost API key for your target network — https://blockfrost.io
+# Only needed when NOT using a local devnet.
+BLOCKFROST_API_KEY=
+
+# Mnemonic (space-separated words) of the wallet that funds and signs txs.
+# Required for Blockfrost. Use a throwaway test wallet — never commit a real
+# seed phrase.
+MNEMONIC=
+
+=== protocol/.gitignore ===
+# sbt / Scala build artifacts
+target/
+.bsp/
+.bloop/
+.metals/
+.scala-build/
+
+# Local secrets (copy .env.example to .env.local and fill it in)
+.env.local
+
+# IDE
+.idea/
+.vscode/
+
+=== protocol/project/plugins.sbt ===
+// The Scalus sbt plugin provides the ScalusSbtPlugin (enabled in build.sbt) and
+// the `blueprint` task. Keep the version in sync with scalusVersion in build.sbt.
+addSbtPlugin("org.scalus" % "scalus-sbt-plugin" % "0.18.2")
+
+=== protocol/project/build.properties ===
+sbt.version=1.12.8
+
+=== protocol/src/main/scala/app/MintingPolicy.scala ===
+package app
+
+import scalus.*
+import scalus.compiler.*
+import scalus.cardano.onchain.plutus.prelude.List.{Cons, Nil}
+import scalus.cardano.onchain.plutus.prelude.{*, given}
+import scalus.cardano.onchain.plutus.v1.{PolicyId, PubKeyHash, TokenName}
+import scalus.cardano.onchain.plutus.v3.{DataParameterizedValidator, TxInfo}
+import scalus.uplc.builtin.{Data, FromData, ToData}
+
+import scala.language.implicitConversions
+
+/** Configuration parameters for the minting policy.
+  *
+  * These values are "baked into" the script when it's deployed, making each deployment unique. The
+  * script hash (policy ID) will change if these parameters change.
+  */
+case class MintingConfig(
+    adminPubKeyHash: PubKeyHash, // Only this key can authorize minting/burning
+    tokenName: TokenName // The only token name this policy allows
+) derives FromData,
+      ToData
+
+/** Minting Policy Validator
+  *
+  * This is the on-chain smart contract that controls token minting and burning. The @Compile
+  * annotation generates Scalus Intermediate Representation (SIR) which is then compiled to Untyped
+  * Plutus Core (UPLC) for execution on Cardano.
+  *
+  * Key concepts:
+  *   - Minting policies validate whether tokens can be minted or burned
+  *   - The policy ID (script hash) becomes the currency symbol for minted tokens
+  *   - DataParameterizedValidator allows passing configuration as script parameters
+  */
+@Compile
+object MintingPolicy extends DataParameterizedValidator {
+
+    /** Core validation logic for minting/burning tokens.
+      *
+      * This function runs ON-CHAIN for every mint/burn transaction. It must succeed (return Unit)
+      * for the transaction to be valid. Any failure (via `fail` or `require`) will reject the
+      * transaction.
+      *
+      * Validation rules:
+      *   1. Only the configured token name can be minted/burned 2. Only one token type per
+      *      transaction (prevents accidental multi-minting) 3. Transaction must be signed by the
+      *      admin key
+      *
+      * @param adminPubKeyHash
+      *   the public key hash of the admin who can authorize minting/burning
+      * @param tokenName
+      *   the only token name this policy allows to mint or burn
+      * @param ownPolicyId
+      *   this script's own policy ID (currency symbol for minted tokens)
+      * @param tx
+      *   transaction information provided by the Cardano ledger
+      */
+    def mintingPolicy(
+        adminPubKeyHash: PubKeyHash,
+        tokenName: TokenName,
+        ownPolicyId: PolicyId,
+        tx: TxInfo
+    ): Unit = {
+        // tx.mint contains all tokens being minted/burned in this transaction
+        // We look up our own policy ID to find tokens we're responsible for validating
+        val mintedTokens = tx.mint.toSortedMap.getOrFail(ownPolicyId, "Tokens not found")
+
+        // Pattern match to ensure exactly one token type with the correct name
+        // Note: Scalus uses its own List type for on-chain code, not scala.List
+        mintedTokens.toList match
+            case Cons((tokName, _), Nil) =>
+                require(tokName == tokenName, "Token name not found")
+            case Cons(_, _) =>
+                fail("Multiple tokens found")
+            case _ =>
+                // Cardano ledger rules guarantee that minting always has tokens
+                impossible()
+
+        // Verify admin authorization - tx.signatories contains all keys that signed
+        require(tx.signatories.contains(adminPubKeyHash), "Not signed by admin")
+    }
+
+    /** Entry point called by the Cardano ledger for minting policy validation.
+      *
+      * DataParameterizedValidator provides this structure where the `param` contains configuration
+      * data embedded in the script at deployment time.
+      *
+      * @param param
+      *   configuration data (MintingConfig) embedded in the script
+      * @param redeemer
+      *   data provided by the transaction (unused here, but could carry intent)
+      * @param policyId
+      *   this script's own policy ID (hash of the script)
+      * @param tx
+      *   full transaction information for validation
+      */
+    override inline def mint(
+        param: Data,
+        redeemer: Data,
+        policyId: PolicyId,
+        tx: TxInfo
+    ): Unit = {
+        val mintingConfig = param.to[MintingConfig]
+        mintingPolicy(mintingConfig.adminPubKeyHash, mintingConfig.tokenName, policyId, tx)
+    }
+
+}
+
+=== protocol/src/main/scala/app/MintingPolicyContract.scala ===
+package app
+
+import scalus.cardano.blueprint.{Blueprint, Contract, HasTypeDescription, Preamble, Validator}
+import scalus.cardano.onchain.plutus.v1.{PubKeyHash, TokenName}
+import scalus.compiler.Options
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.{PlutusV3, Program}
+import scalus.utils.Hex.toHex
+
+/** Off-chain code for compiling, instantiating, and generating blueprints for the minting policy.
+  *
+  * Extends [[Contract]] so the Scalus compiler plugin registers it and the `blueprint` sbt task
+  * (from scalus-sbt-plugin) generates `META-INF/scalus/blueprints/MintingPolicyContract.json`.
+  * `app.genBlueprint` (see Main.scala) writes the same CIP-57 JSON to the canonical
+  * `../blueprint/plutus.json` so the other components can consume it.
+  */
+object MintingPolicyContract extends Contract {
+
+    private given Options = Options.release
+
+    /** Compiled Minting Policy */
+    val compiled: PlutusV3[Data => Data => Unit] =
+        PlutusV3.compile(MintingPolicy.validate)
+
+    /** Optimized UPLC program with error traces for debugging */
+    val program: Program = compiled.withErrorTraces.program
+
+    /** CIP-57 blueprint describing the minting policy schema */
+    lazy val blueprint: Blueprint = {
+        val title = "Minting Policy"
+        val description =
+            "Admin-controlled minting policy for a single token name"
+        val param = summon[HasTypeDescription[MintingConfig]].typeDescription
+        Blueprint(
+          preamble = Preamble(
+            title,
+            description,
+            "1.0.0",
+            plutusVersion = compiled.language,
+            license = Some("Apache-2.0")
+          ),
+          validators = Seq(
+            Validator(
+              title = title,
+              description = Some(description),
+              redeemer = Some(summon[HasTypeDescription[Unit]].typeDescription),
+              datum = None,
+              parameters = Some(List(param)),
+              compiledCode = Some(compiled.program.cborEncoded.toHex),
+              hash = Some(compiled.script.scriptHash.toHex)
+            )
+          )
+        )
+    }
+
+    /** Creates a parameterized minting policy script.
+      *
+      * @param adminPubKeyHash
+      *   public key hash of the admin
+      * @param tokenName
+      *   token name to allow
+      * @return
+      *   a configured minting policy script
+      */
+    def makeMintingPolicyScript(
+        adminPubKeyHash: PubKeyHash,
+        tokenName: TokenName
+    ): PlutusV3[Data => Unit] = {
+        val config = MintingConfig(adminPubKeyHash = adminPubKeyHash, tokenName = tokenName)
+        compiled(config.toData)
+    }
+}
+
+=== protocol/src/main/scala/app/Transactions.scala ===
+package app
+
+import scalus.uplc.builtin.Data
+import scalus.cardano.ledger.{AssetName, Transaction, Value}
+import scalus.cardano.txbuilder.TxBuilder
+import scalus.utils.*
+import scalus.utils.await
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+import scala.util.Try
+
+/** Transaction building logic for minting and burning tokens.
+  *
+  * This class demonstrates how to construct Cardano transactions that interact with Plutus scripts
+  * using the Scalus TxBuilder API.
+  *
+  * Key concepts:
+  *   - Minting: Creating new tokens under a policy ID
+  *   - Burning: Destroying tokens (negative mint amount)
+  *
+  * UTxO selection, collateral, and balancing are handled automatically by TxBuilder.complete().
+  *
+  * @param ctx
+  *   application context containing provider, signer, and script configuration
+  */
+class Transactions(ctx: AppCtx) {
+
+    /** Builds a transaction that mints new tokens.
+      *
+      * @param amount
+      *   number of tokens to mint (positive)
+      * @return
+      *   either an error message or the signed transaction
+      */
+    def makeMintingTx(amount: Long): Either[String, Transaction] = {
+        Try {
+            val assetName = AssetName(ctx.tokenNameByteString)
+            val assets = Map(assetName -> amount)
+            val mintedValue = Value.asset(ctx.mintingScript.script.scriptHash, assetName, amount)
+
+            TxBuilder(ctx.cardanoInfo)
+                .mint(
+                  compiled = ctx.mintingScript,
+                  assets = assets,
+                  redeemer = Data.unit
+                )
+                .requireSignature(ctx.addrKeyHash)
+                .payTo(ctx.address, mintedValue)
+                .complete(ctx.provider, sponsor = ctx.address)
+                .await(30.seconds)
+                .sign(ctx.signer)
+                .transaction
+        }.toEither.left.map(_.getMessage)
+    }
+
+    /** Builds a transaction that burns existing tokens.
+      *
+      * Burning uses a negative mint amount. The tokens to burn must exist in the UTxOs being spent.
+      *
+      * @param amount
+      *   number of tokens to burn (should be negative)
+      * @return
+      *   either an error message or the signed transaction
+      */
+    def makeBurningTx(amount: Long): Either[String, Transaction] = {
+        Try {
+            val assetName = AssetName(ctx.tokenNameByteString)
+            val assets = Map(assetName -> amount)
+
+            TxBuilder(ctx.cardanoInfo)
+                .mint(
+                  compiled = ctx.mintingScript,
+                  assets = assets,
+                  redeemer = Data.unit
+                )
+                .requireSignature(ctx.addrKeyHash)
+                .complete(ctx.provider, sponsor = ctx.address)
+                .await(30.seconds)
+                .sign(ctx.signer)
+                .transaction
+        }.toEither.left.map(_.getMessage)
+    }
+
+    /** Builds, signs, and submits a minting or burning transaction to the network.
+      *
+      * A positive amount mints tokens; a negative amount burns them. The two need different
+      * transaction shapes: minting pays the created tokens to an output, while burning must not add
+      * them to any output - a negative quantity in an output is not even encodable in the
+      * transaction wire format.
+      *
+      * @param amount
+      *   number of tokens to mint (positive) or burn (negative)
+      * @return
+      *   either an error message or the transaction hash (hex)
+      */
+    def submitMintingTx(amount: Long): Either[String, String] = {
+        for
+            tx <-
+                if amount > 0 then makeMintingTx(amount)
+                else if amount < 0 then makeBurningTx(amount)
+                else Left("amount must be non-zero")
+            // Show the full transaction structure - inputs, outputs, mint field, witnesses
+            _ = println(tx.showDetailed)
+            result <- ctx.provider.submit(tx).await(30.seconds).left.map(_.toString)
+        yield result.toHex
+    }
+}
+
+=== protocol/src/main/scala/app/Server.scala ===
+package app
+
+import scalus.uplc.builtin.{ByteString, Data}
+import scalus.cardano.address.Address
+import scalus.cardano.ledger.{AddrKeyHash, CardanoInfo}
+import scalus.utils.await
+
+import scala.concurrent.duration.*
+import scalus.cardano.node.{BlockchainProvider, BlockfrostProvider}
+import scalus.cardano.txbuilder.TransactionSigner
+import scalus.cardano.wallet.hd.HdAccount
+import scalus.cardano.onchain.plutus.v1.PubKeyHash
+import scalus.crypto.ed25519.Ed25519Signer
+import scalus.uplc.PlutusV3
+import sttp.client4.DefaultFutureBackend
+import sttp.tapir.*
+import sttp.tapir.server.netty.sync.NettySyncServer
+import sttp.tapir.swagger.bundle.SwaggerInterpreter
+
+import scala.concurrent.ExecutionContext.Implicits.global
+
+// STTP backend required for BlockfrostProvider's HTTP calls
+given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
+
+/** Application context holding all configuration and dependencies.
+  *
+  * This is the central configuration object that wires together:
+  *   - Network connection (via Provider)
+  *   - Wallet/signing capabilities
+  *   - Minting script configuration
+  *
+  * @param cardanoInfo
+  *   protocol parameters and network configuration
+  * @param provider
+  *   blockchain data provider (Blockfrost or local node)
+  * @param account
+  *   HD wallet account for address derivation
+  * @param signer
+  *   transaction signer with private keys
+  * @param tokenName
+  *   name of the token this instance will mint/burn
+  */
+case class AppCtx(
+    cardanoInfo: CardanoInfo,
+    provider: BlockchainProvider,
+    account: HdAccount,
+    signer: TransactionSigner,
+    tokenName: String
+) {
+
+    /** Public key hash for use in Plutus scripts (on-chain format) */
+    lazy val pubKeyHash: PubKeyHash = PubKeyHash(account.paymentKeyHash)
+
+    /** Address key hash for transaction building (off-chain format) */
+    lazy val addrKeyHash: AddrKeyHash = account.paymentKeyHash
+
+    lazy val tokenNameByteString: ByteString = ByteString.fromString(tokenName)
+    lazy val address: Address = account.baseAddress(cardanoInfo.network)
+
+    /** Full asset identifier: policy ID + token name (used for lookups) */
+    lazy val unitName: String = (mintingScript.script.scriptHash ++ tokenNameByteString).toHex
+
+    /** The configured minting policy script, parameterized with our admin key and token name */
+    lazy val mintingScript: PlutusV3[Data => Unit] =
+        MintingPolicyContract.makeMintingPolicyScript(pubKeyHash, tokenNameByteString)
+}
+
+/** Factory methods for creating AppCtx for different environments. */
+object AppCtx {
+
+    /** Creates an AppCtx from the shared `../.env` (the cardano-init connection seam).
+      *
+      * The choice of network is driven entirely by `../.env` and `.env.local`; this code never
+      * names the tool that wrote the connection details:
+      *   - `INDEXER_URL` set (a local devnet is up, e.g. Yaci DevKit's `just dev`) -> connect to
+      *     that devnet with its built-in test wallet; no Blockfrost key needed.
+      *   - `INDEXER_URL` absent -> Blockfrost, using `BLOCKFROST_API_KEY` + `MNEMONIC` and
+      *     `CARDANO_NETWORK` (preview | preprod | mainnet; default preview).
+      *
+      * @param tokenName
+      *   name for the token to mint
+      */
+    def fromEnv(tokenName: String)(using Ed25519Signer): AppCtx = {
+        val env = DotEnv.load()
+        def get(key: String): Option[String] = env.get(key).map(_.trim).filter(_.nonEmpty)
+
+        get("INDEXER_URL") match
+            case Some(_) => yaciDevKit(tokenName)
+            case None =>
+                val apiKey = get("BLOCKFROST_API_KEY").getOrElse(
+                  sys.error(
+                    "No local devnet is running (INDEXER_URL is unset in ../.env) and " +
+                        "BLOCKFROST_API_KEY is not set. Either start a devnet " +
+                        "(e.g. `just -f devnet/Justfile dev`) or set BLOCKFROST_API_KEY + " +
+                        "MNEMONIC in .env.local (see .env.example)."
+                  )
+                )
+                val mnemonic = get("MNEMONIC").getOrElse(
+                  sys.error("MNEMONIC is not set. See .env.example.")
+                )
+                val network = get("CARDANO_NETWORK").map(_.toLowerCase).getOrElse("preview")
+                apply(network, mnemonic, apiKey, tokenName)
+    }
+
+    /** Creates an AppCtx for a public network (mainnet / preprod / preview) using Blockfrost.
+      *
+      * @param network
+      *   one of "mainnet", "preprod", "preview"
+      * @param mnemonic
+      *   seed phrase for wallet derivation
+      * @param blockfrostApiKey
+      *   API key from blockfrost.io
+      * @param tokenName
+      *   name for the token to mint
+      */
+    def apply(
+        network: String,
+        mnemonic: String,
+        blockfrostApiKey: String,
+        tokenName: String
+    )(using Ed25519Signer): AppCtx = {
+        val provider = network match
+            case "mainnet" => BlockfrostProvider.mainnet(blockfrostApiKey).await(30.seconds)
+            case "preprod" => BlockfrostProvider.preprod(blockfrostApiKey).await(30.seconds)
+            case _         => BlockfrostProvider.preview(blockfrostApiKey).await(30.seconds)
+
+        val account = HdAccount.fromMnemonic(mnemonic)
+
+        new AppCtx(
+          provider.cardanoInfo,
+          provider,
+          account,
+          account.signerForUtxos,
+          tokenName
+        )
+    }
+
+    /** Creates an AppCtx for local development with Yaci DevKit.
+      *
+      * Uses a hardcoded test mnemonic and connects to a local Yaci DevKit node. No API keys
+      * required - perfect for development and testing.
+      *
+      * Prerequisites: a local Yaci DevKit devnet running (the devnet component's `just dev`, or see
+      * https://devkit.yaci.xyz).
+      *
+      * @param tokenName
+      *   name for the token to mint
+      */
+    def yaciDevKit(tokenName: String)(using Ed25519Signer): AppCtx = {
+        // Standard test mnemonic - DO NOT use in production!
+        val mnemonic =
+            "test test test test test test test test test test test test test test test test test test test test test test test sauce"
+
+        // Connect to local Yaci DevKit Blockfrost-compatible API
+        val provider = BlockfrostProvider.localYaci().await(30.seconds)
+
+        val account = HdAccount.fromMnemonic(mnemonic)
+
+        new AppCtx(
+          provider.cardanoInfo,
+          provider,
+          account,
+          account.signerForUtxos,
+          tokenName
+        )
+    }
+}
+
+/** REST API server for the token minting service.
+  *
+  * Built with Tapir for type-safe endpoint definitions and automatic OpenAPI generation. Swagger UI
+  * is available at /docs for interactive API exploration.
+  *
+  * @param ctx
+  *   application context with blockchain connection and signing capabilities
+  */
+class Server(ctx: AppCtx):
+    // Define the mint endpoint using Tapir's type-safe DSL
+    // PUT /mint?amount=100 -> returns transaction hash or error
+    // A negative amount burns tokens instead (PUT /mint?amount=-100)
+    private val mint = endpoint.put
+        .in("mint")
+        .in(query[Long]("amount"))
+        .out(stringBody)
+        .errorOut(stringBody)
+        .handle(mintTokens)
+
+    private val txBuilder = Transactions(ctx)
+
+    private val apiEndpoints = List(mint)
+
+    // Auto-generate Swagger/OpenAPI documentation from endpoint definitions
+    private val swaggerEndpoints = SwaggerInterpreter()
+        .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Token Minter", "0.1")
+
+    /** Handles mint requests by building and submitting a transaction. */
+    private def mintTokens(amount: Long): Either[String, String] =
+        val result = txBuilder.submitMintingTx(amount)
+        result match
+            case Left(value) =>
+                println(s"Error minting tokens: $value")
+            case Right(value) =>
+                println(s"Tokens minted successfully: $value")
+        result
+
+    /** Starts the HTTP server on port 8088.
+      *
+      * Endpoints:
+      *   - PUT /mint?amount=N - Mint N tokens (negative burns)
+      *   - GET /docs - Swagger UI
+      */
+    def start(): Unit =
+        NettySyncServer()
+            .port(8088)
+            .addEndpoints(apiEndpoints ++ swaggerEndpoints)
+            .startAndWait()
+
+=== protocol/src/main/scala/app/Logging.scala ===
+package app
+
+import scribe.format.*
+
+/** Logging configuration.
+  *
+  * Scalus logs via scribe. Its default formatter includes the thread name, e.g.
+  * {{{2026.06.19 10:16:51:892 scala-execution-context-global-113 INFO scalus...submit:595}}} This
+  * reconfigures the root logger with the same layout but without the thread name.
+  */
+object Logging {
+
+    /** scribe's default format minus the `$threadName` block. */
+    private val formatterWithoutThread: Formatter =
+        formatter"$dateFull $levelColored - $messages$mdc"
+
+    /** Apply the thread-less formatter to the root logger. Idempotent. */
+    def configure(): Unit = {
+        scribe.Logger.root
+            .clearHandlers()
+            .withHandler(formatter = formatterWithoutThread)
+            .replace()
+    }
+}
+
+=== protocol/src/main/scala/app/DotEnv.scala ===
+package app
+
+import java.nio.file.{Files, Paths}
+import scala.jdk.CollectionConverters.*
+
+/** Minimal reader for the cardano-init `.env` connection seam.
+  *
+  * Values are gathered from the given files (first occurrence of a key wins) and then overlaid with
+  * the real process environment, which always takes precedence. The shared `../.env` carries
+  * `CARDANO_NETWORK` and the connection details (`INDEXER_URL`, ...); the gitignored `.env.local`
+  * carries secrets (`BLOCKFROST_API_KEY`, `MNEMONIC`). This reader never names the tool that wrote
+  * `../.env` — it only reads the standard keys.
+  */
+object DotEnv {
+
+    private val defaultFiles = Seq("../.env", ".env.local", ".env")
+
+    /** Load key/value pairs from the given env files, overlaid with `System.getenv`. */
+    def load(files: Seq[String] = defaultFiles): Map[String, String] = {
+        val fromFiles = scala.collection.mutable.LinkedHashMap.empty[String, String]
+        for (file <- files) {
+            val path = Paths.get(file)
+            if (Files.exists(path)) {
+                for (line <- Files.readAllLines(path).asScala) {
+                    parseLine(line).foreach { case (key, value) =>
+                        if (!fromFiles.contains(key)) fromFiles(key) = value
+                    }
+                }
+            }
+        }
+        // The real environment always overrides file values.
+        (fromFiles ++ System.getenv().asScala).toMap
+    }
+
+    /** Parse `KEY=value`, ignoring blank lines and `#` comments, stripping surrounding quotes. */
+    private def parseLine(raw: String): Option[(String, String)] = {
+        val line = raw.trim
+        if (line.isEmpty || line.startsWith("#")) None
+        else {
+            val idx = line.indexOf('=')
+            if (idx <= 0) None
+            else {
+                val key = line.substring(0, idx).trim
+                var value = line.substring(idx + 1).trim
+                val quoted = value.length >= 2 &&
+                    ((value.startsWith("\"") && value.endsWith("\"")) ||
+                        (value.startsWith("'") && value.endsWith("'")))
+                if (quoted) value = value.substring(1, value.length - 1)
+                if (key.matches("[A-Za-z_][A-Za-z0-9_]*")) Some(key -> value) else None
+            }
+        }
+    }
+}
+
+=== protocol/src/main/scala/app/Main.scala ===
+package app
+
+import scalus.cardano.blueprint.Blueprint
+import scalus.crypto.ed25519.given
+import scalus.utils.Hex.toHex
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Paths}
+
+/** The token this example mints/burns. Change it and watch the policy ID change. */
+private val ExampleTokenName = "CO2 Tonne"
+
+/** Write the CIP-57 blueprint for the minting policy to `path`.
+  *
+  * This is the on-chain interface-contract seam: the blueprint is the canonical, tool-agnostic
+  * description of the compiled validator that every other component reads from
+  * `../blueprint/plutus.json`. Called by `just build` in the on-chain / fullstack layouts.
+  */
+@main def genBlueprint(path: String): Unit = {
+    val json = MintingPolicyContract.blueprint.toJson()
+    val out = Paths.get(path)
+    Option(out.getParent).foreach(Files.createDirectories(_))
+    Files.write(out, json.getBytes(StandardCharsets.UTF_8))
+    println(s"Wrote CIP-57 blueprint for the minting policy to $path")
+}
+
+/** Cross-check the on-chain blueprint at `path` against this component's bundled minting policy.
+  *
+  * Used by the off-chain `just build`: it consumes the interface-contract blueprint and reports
+  * whether it matches the validator this off-chain example builds transactions for. Missing or
+  * mismatched blueprints only warn — the off-chain code still compiles and runs against its own
+  * bundled policy.
+  */
+@main def verifyBlueprint(path: String): Unit = {
+    val out = Paths.get(path)
+    if (!Files.exists(out))
+        println(
+          s"[blueprint] $path not found yet — build the on-chain component to produce it. " +
+              "Off-chain still compiles and runs against its bundled minting policy."
+        )
+    else {
+        val onDisk = Blueprint.fromJson(Files.readString(out)).validators.headOption
+            .flatMap(_.compiledCode)
+        val ours = MintingPolicyContract.compiled.program.cborEncoded.toHex
+        onDisk match
+            case Some(code) if code == ours =>
+                println("[blueprint] OK — the on-chain blueprint matches the bundled minting policy.")
+            case Some(_) =>
+                println(
+                  s"[blueprint] NOTE: $path describes a different contract than this off-chain " +
+                      "example's bundled minting policy. That is expected when Scalus off-chain is " +
+                      "paired with a non-Scalus on-chain tool; adapt Transactions.scala to it."
+                )
+            case None =>
+                println(s"[blueprint] WARNING: no compiledCode found in $path.")
+    }
+}
+
+/** Start the minting REST API, choosing the network from the shared `../.env` (see AppCtx.fromEnv):
+  * a local devnet if one is running, otherwise Blockfrost.
+  */
+@main def start(): Unit = {
+    Logging.configure()
+    val ctx = AppCtx.fromEnv(ExampleTokenName)
+    println("Starting the minting server on http://localhost:8088 (Swagger UI at /docs) ...")
+    Server(ctx).start()
+}
+
+/** Start the minting REST API against a local Yaci DevKit devnet (built-in test wallet). */
+@main def yaciDevKit(): Unit = {
+    Logging.configure()
+    val ctx = AppCtx.yaciDevKit(ExampleTokenName)
+    println("Starting the minting server against a local Yaci DevKit devnet on http://localhost:8088 ...")
+    Server(ctx).start()
+}
+
+=== protocol/src/test/scala/app/MintingPolicyTest.scala ===
+package app
+
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scalus.*
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.ByteString.utf8
+import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.platform
+import scalus.cardano.ledger.{AddrKeyHash, AssetName, CardanoInfo}
+import scalus.cardano.onchain.plutus.v1.{PubKeyHash, Value}
+import scalus.cardano.onchain.plutus.v1.Value.*
+import scalus.cardano.onchain.plutus.v3.*
+import scalus.cardano.onchain.plutus.prelude.*
+import scalus.cardano.txbuilder.{RedeemerPurpose, txBuilder}
+import scalus.cardano.wallet.hd.HdAccount
+import scalus.crypto.ed25519.given
+import scalus.testing.kit.ScalusTest
+import scalus.testing.kit.TestUtil.getScriptContextV3
+import scalus.uplc.*
+import scalus.uplc.eval.*
+
+import scala.language.implicitConversions
+
+enum Expected {
+    case Success
+    case Failure(reason: String)
+}
+
+/** Unit tests for the minting policy, run BOTH as a plain Scala function (debuggable, breakpoints
+  * work) and as a compiled Plutus script on the built-in evaluator — no blockchain, milliseconds
+  * per test.
+  */
+class MintingPolicyTest extends AnyFunSuite with ScalaCheckPropertyChecks with ScalusTest {
+    import Expected.*
+
+    private given env: CardanoInfo = CardanoInfo.mainnet
+
+    private val account = HdAccount.fromMnemonic(
+      "test test test test test test test test test test test test test test test test test test test test test test test sauce"
+    )
+
+    private val tokenName = utf8"CO2 Tonne"
+
+    private val adminPubKeyHash: PubKeyHash = PubKeyHash(account.paymentKeyHash)
+
+    private val config = MintingConfig(adminPubKeyHash, tokenName)
+
+    private val mintingScript =
+        MintingPolicyContract.makeMintingPolicyScript(adminPubKeyHash, tokenName)
+
+    test("should fail when minted token name is not correct") {
+        val wrongTokenName = tokenName ++ utf8"extra"
+        val ctx = makeScriptContext(
+          mint = Map(AssetName(wrongTokenName) -> 1000L),
+          requiredSigners = Set(account.paymentKeyHash)
+        )
+
+        val exception = intercept[Exception] {
+            MintingPolicy.validate(config.toData)(ctx.toData)
+        }
+        assert(exception.getMessage == "Token name not found")
+
+        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+    }
+
+    test("should fail when extra tokens are minted/burned") {
+        val ctx = makeScriptContext(
+          mint = Map(AssetName(tokenName) -> 1000L, AssetName(utf8"Extra") -> 1000L),
+          requiredSigners = Set(account.paymentKeyHash)
+        )
+
+        val exception = intercept[Exception] {
+            MintingPolicy.validate(config.toData)(ctx.toData)
+        }
+        assert(exception.getMessage == "Multiple tokens found")
+
+        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+    }
+
+    test("should fail when admin signature is not provided") {
+        val ctx = makeScriptContext(
+          mint = Map(AssetName(tokenName) -> 1000L),
+          requiredSigners = Set.empty
+        )
+
+        val exception = intercept[Exception] {
+            MintingPolicy.validate(config.toData)(ctx.toData)
+        }
+        assert(exception.getMessage == "Not signed by admin")
+
+        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+    }
+
+    test("should fail when admin signature is not correct") {
+        val ctx = makeScriptContext(
+          mint = Map(AssetName(tokenName) -> 1000L),
+          requiredSigners = Set(AddrKeyHash(platform.blake2b_224(ByteString.fromString("wrong"))))
+        )
+
+        val exception = intercept[Exception] {
+            MintingPolicy.validate(config.toData)(ctx.toData)
+        }
+        assert(exception.getMessage == "Not signed by admin")
+
+        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+    }
+
+    test("should succeed when minted token name is correct and admin signature is correct") {
+        val ctx = makeScriptContext(
+          mint = Map(AssetName(tokenName) -> 1000L),
+          requiredSigners = Set(account.paymentKeyHash)
+        )
+        // run the minting policy script as a Scala function
+        // here you can use a debugger to step through the minting policy logic
+        MintingPolicy.validate(config.toData)(ctx.toData)
+        // run the minting policy script as a Plutus script
+        assertEval(mintingScript.program $ ctx.toData, Success)
+    }
+
+    test("compiles to a non-empty Plutus V3 script") {
+        val size = mintingScript.program.cborEncoded.length
+        info(s"minting policy script size: $size bytes")
+        assert(size > 0)
+    }
+
+    private def makeScriptContext(
+        mint: Map[AssetName, Long],
+        requiredSigners: Set[AddrKeyHash]
+    ) = {
+        val mintValue = mint.foldLeft(Value.zero) { case (acc, (assetName, qty)) =>
+            acc + Value(mintingScript.script.scriptHash, assetName.bytes, BigInt(qty))
+        }
+        val tx = txBuilder
+            .mint(
+              script = mintingScript.script,
+              assets = mint,
+              redeemer = Data.unit
+            )
+            .requireSignatures(requiredSigners)
+            .payTo(account.baseAddress(env.network), mintValue.toLedgerValue)
+            .draft
+
+        tx.getScriptContextV3(Map.empty, RedeemerPurpose.ForMint(mintingScript.script.scriptHash))
+    }
+
+    private def assertEval(p: Program, expected: Expected): Unit = {
+        val result = p.evaluateDebug
+        (result, expected) match
+            case (_: Result.Success, Expected.Success) =>
+                () // succeeded, as expected
+            case (result: Result.Failure, Expected.Failure(expected)) =>
+                assert(
+                  result.exception.getMessage.startsWith(expected),
+                  s"Expected message starting with '$expected', got '${result.exception.getMessage}'"
+                )
+            case _ => fail(s"Unexpected result: $result, expected: $expected")
+    }
+}
+
+=== protocol/src/test/scala/app/EmulatorTest.scala ===
+package app
+
+import org.scalatest.Suite
+import scalus.cardano.address.Network
+import scalus.cardano.node.Emulator
+import scalus.cardano.wallet.hd.HdAccount
+import scalus.crypto.ed25519.given
+
+/** Mixes an in-memory Cardano [[Emulator]] into a test: transactions are built, submitted, and
+  * confirmed instantly, with no blockchain and no Docker.
+  */
+trait EmulatorTest { self: Suite =>
+    def createAppCtx(tokenName: String): AppCtx = {
+        val mnemonic =
+            "test test test test test test test test test test test test test test test test test test test test test test test sauce"
+        val account = HdAccount.fromMnemonic(mnemonic)
+        val address = account.baseAddress(Network.Mainnet)
+        val emulator = Emulator.withAddresses(Seq(address))
+        new AppCtx(
+          emulator.cardanoInfo,
+          emulator,
+          account,
+          account.signerForUtxos,
+          tokenName
+        )
+    }
+}
+
+=== protocol/src/test/scala/app/TransactionsTestBase.scala ===
+package app
+
+import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.AssetName
+
+/** Transaction-building assertions shared by any environment that can supply an [[AppCtx]] (the
+  * emulator here; a real devnet in an integration test elsewhere).
+  */
+trait TransactionsTestBase { self: AnyFunSuite =>
+    def createAppCtx(tokenName: String): AppCtx
+
+    test("create minting transaction") {
+        val appCtx = createAppCtx("CO2 Tonne")
+        val txBuilder = Transactions(appCtx)
+
+        txBuilder.makeMintingTx(1000) match
+            case Right(tx) =>
+                println(s"minting tx: ${tx.id.toHex}")
+                val mint = tx.body.value.mint
+                assert(mint.nonEmpty)
+                val expectedAssetName = AssetName(appCtx.tokenNameByteString)
+                val mintedAmount = mint
+                    .flatMap(_.assets.get(appCtx.mintingScript.script.scriptHash))
+                    .flatMap(_.get(expectedAssetName))
+                assert(mintedAmount.contains(1000L))
+                // Check that the transaction has witnesses
+                assert(tx.witnessSet.vkeyWitnesses.toSet.nonEmpty)
+            case Left(err) => fail(err)
+    }
+}
+
+=== protocol/src/test/scala/app/TransactionsEmulatorTest.scala ===
+package app
+
+import org.scalatest.funsuite.AnyFunSuite
+import scalus.utils.await
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration.*
+
+/** End-to-end mint + burn against the in-memory emulator — the full off-chain flow with no
+  * blockchain: build, submit, confirm, then verify the tokens were burned.
+  */
+class TransactionsEmulatorTest extends AnyFunSuite with TransactionsTestBase with EmulatorTest {
+
+    test("submitMintingTx burns tokens when the amount is negative") {
+        val appCtx = createAppCtx("CO2 Tonne")
+        val txBuilder = Transactions(appCtx)
+
+        assert(txBuilder.submitMintingTx(1000).isRight)
+        assert(txBuilder.submitMintingTx(-1000).isRight)
+
+        val utxos = appCtx.provider.findUtxos(appCtx.address).await(10.seconds).toOption.get
+        val tokenUtxos = utxos.filter { case (_, utxo) =>
+            utxo.value.assets.assets.contains(appCtx.mintingScript.script.scriptHash)
+        }
+        assert(tokenUtxos.isEmpty, s"Expected all tokens burned but found: $tokenUtxos")
+    }
+
+    test("submitMintingTx rejects a zero amount") {
+        val appCtx = createAppCtx("CO2 Tonne")
+        assert(Transactions(appCtx).submitMintingTx(0).isLeft)
+    }
 }
 

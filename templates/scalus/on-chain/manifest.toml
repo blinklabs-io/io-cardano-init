@@ -1,10 +1,38 @@
 [manifest]
-summary = "Scalus on-chain validators (placeholder — not yet implemented)"
+summary = "Scalus on-chain project: a Plutus V3 minting policy in Scala 3 that compiles to UPLC and writes a CIP-57 blueprint to ../blueprint/plutus.json"
 
 [[files]]
 source = "Justfile.jinja"
 dest = "Justfile"
 
 [[files]]
-source = "src/Validator.scala"
-dest = "src/Validator.scala"
+source = "build.sbt.jinja"
+dest = "build.sbt"
+
+[[files]]
+source = ".gitignore"
+dest = ".gitignore"
+
+[[files]]
+source = "project/plugins.sbt"
+dest = "project/plugins.sbt"
+
+[[files]]
+source = "project/build.properties"
+dest = "project/build.properties"
+
+[[files]]
+source = "src/main/scala/app/MintingPolicy.scala"
+dest = "src/main/scala/app/MintingPolicy.scala"
+
+[[files]]
+source = "src/main/scala/app/MintingPolicyContract.scala"
+dest = "src/main/scala/app/MintingPolicyContract.scala"
+
+[[files]]
+source = "src/main/scala/app/Main.scala"
+dest = "src/main/scala/app/Main.scala"
+
+[[files]]
+source = "src/test/scala/app/MintingPolicyTest.scala"
+dest = "src/test/scala/app/MintingPolicyTest.scala"

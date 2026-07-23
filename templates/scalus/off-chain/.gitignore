@@ -1,0 +1,13 @@
+# sbt / Scala build artifacts
+target/
+.bsp/
+.bloop/
+.metals/
+.scala-build/
+
+# Local secrets (copy .env.example to .env.local and fill it in)
+.env.local
+
+# IDE
+.idea/
+.vscode/

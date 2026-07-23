@@ -1,11 +1,28 @@
-# Off-chain component (Scalus) — PLACEHOLDER
+# Off-chain component (Scalus) — transaction building
 # Part of {{ project_name }}
+#
+# Builds and submits mint/burn transactions for the minting policy with Scalus's
+# TxBuilder (UTxO selection, collateral, and balancing are automatic). Where
+# transactions go is decided by the shared ../.env — this component never names
+# the tool that wrote it:
+#   • INDEXER_URL set (a local devnet, e.g. Yaci DevKit's `just dev`) → that
+#     devnet, with its built-in test wallet. No Blockfrost key needed.
+#   • INDEXER_URL absent → Blockfrost (needs BLOCKFROST_API_KEY + MNEMONIC in
+#     .env.local — see .env.example).
 
+# Compile, then verify the on-chain blueprint at ../{{ blueprint_path }} matches
+# the bundled minting policy (only warns if it's absent or for another contract).
 build:
-    @echo "Scalus off-chain is a placeholder — not yet implemented."
+    sbt "runMain app.verifyBlueprint ../{{ blueprint_path }}"
 
+# Unit tests on the built-in emulator — no blockchain, milliseconds per test.
 test:
-    @echo "Scalus off-chain tests are a placeholder — not yet implemented."
+    sbt test
+
+# Run the minting REST API against whatever ../.env points at (local devnet or
+# Blockfrost). Swagger UI at http://localhost:8088/docs. Long-running: Ctrl-C.
+dev:
+    sbt "runMain app.start"
 
 clean:
-    @echo "Nothing to clean (Scalus placeholder)."
+    sbt clean

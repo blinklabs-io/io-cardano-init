@@ -369,8 +369,12 @@ mod tests {
     fn scan_distinguishes_scalus_on_chain() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        fs::create_dir_all(root.join("on-chain/src")).unwrap();
-        fs::write(root.join("on-chain/src/Validator.scala"), "").unwrap();
+        fs::create_dir_all(root.join("on-chain")).unwrap();
+        fs::write(
+            root.join("on-chain/build.sbt"),
+            "\"org.scalus\" %% \"scalus\" % scalusVersion\n",
+        )
+        .unwrap();
 
         let result = scan_project(root, &registry());
         let onchain = result
@@ -425,9 +429,12 @@ mod tests {
         // fullstack component (its real system_deps then feed the required set).
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        fs::create_dir_all(root.join("protocol/src")).unwrap();
-        fs::write(root.join("protocol/src/Validator.scala"), "").unwrap();
-        fs::write(root.join("protocol/src/Main.scala"), "").unwrap();
+        fs::create_dir_all(root.join("protocol")).unwrap();
+        fs::write(
+            root.join("protocol/build.sbt"),
+            "\"org.scalus\" %% \"scalus\" % scalusVersion\n",
+        )
+        .unwrap();
 
         let result = scan_project(root, &registry());
         let protocol = result
