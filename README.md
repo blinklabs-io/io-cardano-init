@@ -14,12 +14,12 @@ Built for newcomers and coding agents alike.
 $ cardano-init --name my-protocol --on-chain aiken --off-chain meshjs --devnet yaci
 
 my-protocol/
-├── on-chain/     # Aiken validators  →  blueprint/plutus.json
-├── off-chain/    # MeshJS tx building, reads .env
-├── devnet/       # Yaci DevKit local throwaway chain
+├── on-chain/     # Validators (aiken)
+├── off-chain/    # Tx building (MeshJS)
+├── devnet/       # Local throwaway chain (Yaci DevKit)
 ├── blueprint/    # shared CIP-57 contract interface
-├── .env          # connection seam between components
-├── Justfile      # just build · just test · just clean
+├── .env          # shared between components
+├── Justfile      # Commands to build, test, and clean
 └── README.md
 
 $ cd my-protocol && just test
