@@ -86,10 +86,24 @@ def load_methods(deps_path: Path, installer: str) -> list[tuple[str, str, list[s
     return found
 
 
+def _is_dir(d: Path) -> bool:
+    """Like `Path.is_dir()` but treats an unstattable path as absent.
+
+    A candidate we can't reach (e.g. `/root/.cargo/bin` from a non-root runner)
+    raises `PermissionError`, which `Path.is_dir()` propagates rather than
+    swallowing. For a best-effort PATH-augmentation probe, unreachable == not a
+    usable bin dir, so fold every stat error into False.
+    """
+    try:
+        return d.is_dir()
+    except OSError:
+        return False
+
+
 def lookup_path() -> str:
     """PATH augmented with the tool-managed bin dirs (for the presence check)."""
     parts = os.environ.get("PATH", "").split(os.pathsep)
-    parts += [str(d) for d in EXTRA_BIN_DIRS if d.is_dir()]
+    parts += [str(d) for d in EXTRA_BIN_DIRS if _is_dir(d)]
     return os.pathsep.join(parts)
 
 
