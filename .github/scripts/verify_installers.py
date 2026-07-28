@@ -28,6 +28,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -100,32 +101,76 @@ def _is_dir(d: Path) -> bool:
         return False
 
 
-def lookup_path() -> str:
+def lookup_path(extra: list[Path] | None = None) -> str:
     """PATH augmented with the tool-managed bin dirs (for the presence check)."""
     parts = os.environ.get("PATH", "").split(os.pathsep)
     parts += [str(d) for d in EXTRA_BIN_DIRS if _is_dir(d)]
+    parts += [str(d) for d in (extra or []) if _is_dir(d)]
     return os.pathsep.join(parts)
 
 
-def verify_one(dep_id: str, arg: str, binaries: list[str], command: str) -> bool:
-    """Run one install command; report whether its binaries are reachable."""
-    print(f"::group::{dep_id} via {command}", flush=True)
-    ok = True
-    try:
-        subprocess.run(command, shell=True, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"  ✗ install command exited {e.returncode}", flush=True)
-        ok = False
+def build_command(installer: str, template: str, arg: str) -> tuple[str, list[Path]]:
+    """Render a recipe's install command and any extra bin dirs to look in.
 
-    path = lookup_path()
+    Mirrors `Installer::command()`; `.rstrip()` matches its bare `aikup install`
+    (empty arg ⇒ latest, no trailing space).
+
+    For `nix`, each recipe is redirected into its own throwaway profile. A real
+    user installs ONE tool, but this gate installs every nix recipe into a
+    single environment, where two packages that ship the same file collide
+    (e.g. rustup and cargo both provide `cargo.bash`). Per-recipe profiles
+    remove that false conflict; the nixpkgs attr installed is exactly what
+    `doctor` prints — only the profile location differs, in the same spirit as
+    the EXTRA_BIN_DIRS PATH augmentation above.
+    """
+    command = template.format(arg=arg).rstrip()
+    extra: list[Path] = []
+    if installer == "nix":
+        profile = Path(tempfile.mkdtemp(prefix="nixprof-")) / "profile"
+        command = command.replace(
+            "nix profile install ",
+            f"nix profile install --profile {profile} ",
+            1,
+        )
+        extra.append(profile / "bin")
+    return command, extra
+
+
+def verify_one(
+    dep_id: str, binaries: list[str], command: str, extra_bin_dirs: list[Path]
+) -> bool:
+    """Run one install command; report whether its binaries are reachable.
+
+    Success is defined by the binary being reachable afterwards, NOT by the
+    install command's exit code. Some recipes exit non-zero for reasons that
+    don't reflect a broken recipe — e.g. brew's rustup post-install step fails
+    on a runner that already ships a Rust toolchain, yet `rustup` is installed
+    and on PATH. We surface a non-zero exit as a warning but only fail when a
+    declared binary is actually missing.
+    """
+    print(f"::group::{dep_id} via {command}", flush=True)
+    install_rc = subprocess.run(command, shell=True).returncode
+
+    path = lookup_path(extra_bin_dirs)
+    missing = False
     for binary in binaries:
         if shutil.which(binary, path=path):
             print(f"  ✓ {binary} on PATH", flush=True)
         else:
             print(f"  ✗ {binary} NOT found after install", flush=True)
-            ok = False
+            missing = True
+
+    if install_rc != 0:
+        if missing:
+            print(f"  ✗ install command exited {install_rc}", flush=True)
+        else:
+            print(
+                f"  ! install command exited {install_rc}, but binaries are "
+                f"present — treating as OK",
+                flush=True,
+            )
     print("::endgroup::", flush=True)
-    return ok
+    return not missing
 
 
 def main() -> int:
@@ -155,8 +200,8 @@ def main() -> int:
 
     failures: list[str] = []
     for dep_id, arg, binaries in methods:
-        command = template.format(arg=arg)
-        if not verify_one(dep_id, arg, binaries, command):
+        command, extra_bin_dirs = build_command(args.installer, template, arg)
+        if not verify_one(dep_id, binaries, command, extra_bin_dirs):
             failures.append(dep_id)
 
     print()

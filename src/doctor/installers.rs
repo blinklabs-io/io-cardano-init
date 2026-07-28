@@ -142,6 +142,9 @@ impl Installer {
             Installer::Go => format!("go install {arg}"),
             Installer::Cargo => format!("cargo install {arg}"),
             Installer::Npm => format!("npm install -g {arg}"),
+            // An empty arg means "latest" — aikup installs the newest release
+            // when given no version, so avoid a stray trailing space.
+            Installer::Aikup if arg.is_empty() => "aikup install".to_string(),
             Installer::Aikup => format!("aikup install {arg}"),
             Installer::CardanoUp => format!("cardano-up install {arg}"),
             Installer::Curl => format!("curl -sSfL {arg} | sh"),
@@ -209,5 +212,8 @@ mod tests {
             Installer::Curl.command("https://sh.rustup.rs"),
             "curl -sSfL https://sh.rustup.rs | sh"
         );
+        // Empty aikup arg renders bare `aikup install` (latest), no trailing space.
+        assert_eq!(Installer::Aikup.command(""), "aikup install");
+        assert_eq!(Installer::Aikup.command("v1.1.0"), "aikup install v1.1.0");
     }
 }

@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn multi_step_bootstrap_aiken_via_npm() {
         // aiken missing, no nix/aikup, but npm present → bootstrap aikup via npm,
-        // then `aikup install latest`.
+        // then `aikup install` (bare ⇒ latest).
         let report = resolve_all(
             &["aiken".to_string()],
             &catalog(),
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(aiken.plan[0].installer, Installer::Npm);
         assert_eq!(aiken.plan[0].command, "npm install -g @aiken-lang/aikup");
         assert_eq!(aiken.plan[1].installer, Installer::Aikup);
-        assert_eq!(aiken.plan[1].command, "aikup install latest");
+        assert_eq!(aiken.plan[1].command, "aikup install");
     }
 
     #[test]
