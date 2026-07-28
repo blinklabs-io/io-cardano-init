@@ -1,0 +1,155 @@
+# Scheduled installer-recipe gate.
+#
+# Purpose: prove the `cardano-init doctor` install recipes in
+# `registry/deps.toml` still WORK against the live world. For each installer,
+# this runs every recipe that offers it (in an environment where that installer
+# is native) and checks the dep's declared binaries end up on PATH.
+#
+# Two-tier design (the other tier is the PR gate in ci.yml → `cargo test`):
+#   • PR gate      — `src/doctor/catalog.rs` tests prove every recipe PARSES and
+#                    names a known installer. Pure, fast, no network. Per commit.
+#   • THIS gate    — proves each recipe actually INSTALLS its binary. Network-
+#                    and world-dependent (a renamed package, a moved install
+#                    script, a formula rename), so it drifts with zero commits
+#                    here — same class of problem as scheduled-smoke.yml, hence
+#                    a schedule + a tracking issue, never a PR gate.
+#
+# The matrix is drawn from what deps.toml actually uses today. Not yet covered
+# (documented, not silent):
+#   • dnf, pacman   — no recipes reference them yet; add a row when one does.
+#   • winget, powershell — Windows-only installers; winget is unreliable
+#                    headless and the PowerShell recipes are `irm | iex` scripts.
+#                    Deferred until we add a Windows runner deliberately.
+#   • curl          — the download-and-run recipes (rustup, aikup) drive
+#                    interactive installers that refuse a non-interactive shell
+#                    without a `-y`-style flag the recipe doesn't pass, so they
+#                    can't be verified headless as written. Excluded so a green
+#                    run stays meaningful; revisit if the recipes gain unattended
+#                    flags.
+# The verify script no-ops cleanly for any installer with no recipes, so adding
+# a row early is harmless.
+
+name: installer-recipes
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC, one hour after scheduled-smoke
+  workflow_dispatch: {} # allow manual runs
+  # Opt-in per-PR run: add the `run-installer-recipes` label to a PR to run
+  # this (world-dependent, expensive) gate against that PR's code. It stays off
+  # the every-commit path — re-add the label to re-run.
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.installer }} recipes
+    # Schedule and manual runs always run; PR runs only for our opt-in label
+    # (a `labeled` event fires for every label, so filter to ours).
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-installer-recipes'
+    runs-on: ${{ matrix.runs-on }}
+    # Empty for host rows → no container. Set only where a distro package
+    # manager needs its native image.
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false # one installer breaking must not mask the others
+      matrix:
+        include:
+          - installer: apt
+            runs-on: ubuntu-latest
+            container: ubuntu:24.04
+          - installer: brew
+            runs-on: macos-latest
+          - installer: nix
+            runs-on: ubuntu-latest
+          - installer: npm
+            runs-on: ubuntu-latest
+          - installer: cargo
+            runs-on: ubuntu-latest
+          - installer: go
+            runs-on: ubuntu-latest
+          - installer: aikup
+            runs-on: ubuntu-latest
+    steps:
+      # Bare distro containers lack the basics checkout and the recipes need.
+      - name: Bootstrap container (apt)
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          apt-get install -y sudo python3 git curl ca-certificates
+
+      - uses: actions/checkout@v5
+
+      # --- per-installer prerequisites: make `matrix.installer` native ---
+
+      - name: Install Nix
+        if: matrix.installer == 'nix'
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Install Node (for npm)
+        if: matrix.installer == 'npm' || matrix.installer == 'aikup'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install Rust (for cargo)
+        if: matrix.installer == 'cargo'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Go
+        if: matrix.installer == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      # aikup is itself a bootstrappable installer (Installer::bootstrap ⇒ node
+      # → npm → @aiken-lang/aikup). Install it so its own recipes can run.
+      - name: Bootstrap aikup
+        if: matrix.installer == 'aikup'
+        run: npm install -g @aiken-lang/aikup
+
+      - name: Verify recipes for ${{ matrix.installer }}
+        run: python3 .github/scripts/verify_installers.py ${{ matrix.installer }}
+
+  notify-on-failure:
+    needs: verify
+    # Only file an issue for the unattended scheduled run, not manual debugging.
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const label = "installer-recipes";
+            const title = "Installer recipe check failed: a doctor install recipe no longer works";
+            const today = new Date().toISOString().slice(0, 10);
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The weekly installer-recipe check failed on ${today}.`,
+              ``,
+              `One or more \`cardano-init doctor\` recipes in registry/deps.toml no`,
+              `longer install their binary — likely a renamed package, a moved`,
+              `install script, or a formula rename upstream. The failing job name`,
+              `is the installer; its log lists the affected dep(s).`,
+              ``,
+              `Run: ${runUrl}`,
+            ].join("\n");
+
+            // De-dupe: comment on the existing open issue instead of spamming a
+            // new one every Monday. (Creating an issue auto-creates the label.)
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: "open", labels: label,
+            });
+            if (existing.data.length === 0) {
+              await github.rest.issues.create({ owner, repo, title, body, labels: [label] });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.data[0].number, body,
+              });
+            }
