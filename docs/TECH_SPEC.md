@@ -544,7 +544,7 @@ The two passes are what make a directly-usable installer win over bootstrapping 
     { "id": "node",  "required": true,  "present": true },
     { "id": "aiken", "required": true,  "present": false,
       "plan": [ { "installer": "npm",   "command": "npm install -g @aiken-lang/aikup" },
-                { "installer": "aikup", "command": "aikup install latest" } ],
+                { "installer": "aikup", "command": "aikup install" } ],
       "docs": "https://aiken-lang.org/installation-instructions" }
   ]
 }}

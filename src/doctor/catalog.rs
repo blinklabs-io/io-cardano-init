@@ -152,7 +152,8 @@ mod tests {
         assert_eq!(aiken.binaries, vec!["aiken".to_string()]);
         // First method is aikup, second is nix (order = preference).
         assert_eq!(aiken.install[0].installer, Installer::Aikup);
-        assert_eq!(aiken.install[0].arg, "latest");
+        // Empty arg ⇒ `aikup install` (latest); "latest" is not a valid tag.
+        assert_eq!(aiken.install[0].arg, "");
         assert_eq!(aiken.install[1].installer, Installer::Nix);
     }
 

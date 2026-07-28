@@ -27,12 +27,14 @@ install = [{ brew = "node" }, { apt = "nodejs" }, { winget = "OpenJS.NodeJS" }, 
 [aiken]
 binaries = ["aiken"]
 docs = "https://aiken-lang.org/installation-instructions"
-install = [{ aikup = "latest" }, { nix = "aiken" }]
+install = [{ aikup = "" }, { nix = "aiken" }]
 
 [sbt]
 binaries = ["sbt"]
 docs = "https://www.scala-sbt.org/download.html"
-install = [{ brew = "sbt" }, { apt = "sbt" }, { nix = "sbt" }]
+# No stock `apt` package: sbt ships only via its own scala-sbt apt repo, which a
+# single-package recipe can't add — so apt is deliberately omitted (use brew/nix).
+install = [{ brew = "sbt" }, { nix = "sbt" }]
 
 [jvm]
 binaries = ["java"]
@@ -76,4 +78,6 @@ install = [{ brew = "go" }, { apt = "golang" }, { winget = "GoLang.Go" }, { nix 
 [process-compose]
 binaries = ["process-compose"]
 docs = "https://f1bonacc1.github.io/process-compose/"
-install = [{ brew = "process-compose" }, { go = "github.com/f1bonacc1/process-compose@latest" }, { nix = "process-compose" }]
+# process-compose is not in homebrew-core; it lives in the maintainer's tap.
+# `brew install` auto-taps a tap-qualified formula.
+install = [{ brew = "f1bonacc1/tap/process-compose" }, { go = "github.com/f1bonacc1/process-compose@latest" }, { nix = "process-compose" }]
