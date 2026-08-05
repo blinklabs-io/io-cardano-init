@@ -33,6 +33,11 @@ pub struct ToolView {
     /// on-chain + off-chain as one `protocol/` component (`--fullstack <tool>`).
     /// A capability, not a role — never appears in `roles`.
     pub fullstack: bool,
+    /// `true` when the tool is **experimental**: it generates but is not yet
+    /// build-green. Additive field (no `schema_version` bump); lets agents
+    /// filter or warn before selecting it (selecting one needs
+    /// `--allow-experimental`).
+    pub experimental: bool,
 }
 
 /// All roles in canonical (`Role::ALL`) order.
@@ -68,6 +73,7 @@ pub fn tool_views(registry: &Registry) -> Vec<ToolView> {
                 languages: tool.languages.clone(),
                 roles,
                 fullstack: tool.fullstack.is_some(),
+                experimental: tool.experimental,
             }
         })
         .collect();
@@ -141,5 +147,16 @@ mod tests {
         let aiken = views.iter().find(|t| t.id == "aiken").unwrap();
         assert_eq!(aiken.roles, vec!["on-chain"]);
         assert!(!aiken.fullstack);
+    }
+
+    #[test]
+    fn tool_views_surface_experimental_flag() {
+        let views = tool_views(&registry());
+        // Experimental status is carried through to the discovery surface so
+        // `list` and the web builder can flag not-yet-build-green tools.
+        let blaster = views.iter().find(|t| t.id == "blaster").unwrap();
+        assert!(blaster.experimental);
+        let aiken = views.iter().find(|t| t.id == "aiken").unwrap();
+        assert!(!aiken.experimental);
     }
 }

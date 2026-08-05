@@ -269,6 +269,8 @@
 
   .tool-name { font-weight: 600; font-size: 0.95rem; }
 
+  .tool-badges { display: flex; align-items: center; gap: 0.4rem; }
+
   .tool-lang {
     font-size: 0.7rem;
     font-weight: 600;
@@ -278,6 +280,26 @@
     background: var(--accent-dim);
     padding: 0.15rem 0.5rem;
     border-radius: 4px;
+  }
+
+  .tool-experimental {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #f5b45b;
+    background: rgba(245, 180, 91, 0.15);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+  }
+
+  /* Experimental tools read as tentative until chosen. */
+  .tool-card.is-experimental { border-style: dashed; }
+
+  .tool-experimental-note {
+    font-size: 0.75rem;
+    color: #f5b45b;
+    margin-top: 0.35rem;
   }
 
   .tool-desc {
@@ -461,12 +483,16 @@
         </div>
         <div class="tool-grid" data-role="${role}">
           ${tools.map(t => `
-            <div class="tool-card${isSelected(role, t.id) ? ' selected' : ''}" data-tool="${t.id}" data-role="${role}">
+            <div class="tool-card${isSelected(role, t.id) ? ' selected' : ''}${t.experimental ? ' is-experimental' : ''}" data-tool="${t.id}" data-role="${role}">
               <div class="tool-card-header">
                 <span class="tool-name">${t.name}</span>
-                <span class="tool-lang">${t.languages.join(', ')}</span>
+                <span class="tool-badges">
+                  ${t.experimental ? '<span class="tool-experimental">Experimental</span>' : ''}
+                  <span class="tool-lang">${t.languages.join(', ')}</span>
+                </span>
               </div>
               <div class="tool-desc">${firstSentence(t.description)}</div>
+              ${t.experimental ? '<div class="tool-experimental-note">May be unstable or incomplete; expect rough edges. Needs --allow-experimental.</div>' : ''}
               <a class="tool-website" href="${t.website}" target="_blank">${t.website}</a>
             </div>
           `).join('')}
@@ -518,6 +544,14 @@
     return selection[role] === toolId;
   }
 
+  // True if the given tool id is selected in any role (used to decide whether
+  // the emitted command needs --allow-experimental).
+  function isToolSelected(toolId) {
+    return selection['on-chain'] === toolId || selection['off-chain'] === toolId ||
+      selection['devnet'] === toolId || selection['formal-methods'] === toolId ||
+      selection['infrastructure'].includes(toolId);
+  }
+
   function hasSelection() {
     return selection['on-chain'] || selection['off-chain'] ||
       selection['infrastructure'].length > 0 || selection['devnet'] ||
@@ -547,6 +581,11 @@
     if (selection['formal-methods']) parts.push('--formal-methods', selection['formal-methods']);
     if (network !== 'preview') parts.push('--network', network);
     if (nix) parts.push('--nix');
+    // Selecting an experimental tool requires an explicit opt-in on the CLI, so
+    // the emitted command includes the flag — otherwise the paste would error.
+    if (registry.tools.some(t => t.experimental && isToolSelected(t.id))) {
+      parts.push('--allow-experimental');
+    }
 
     el.textContent = parts.join(' ');
     el.classList.remove('command-empty');

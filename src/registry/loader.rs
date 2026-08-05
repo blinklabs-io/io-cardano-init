@@ -93,6 +93,8 @@ struct ToolMetaToml {
     nix_packages: Vec<String>,
     #[serde(default)]
     detect: Vec<DetectToml>,
+    #[serde(default)]
+    experimental: bool,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +198,7 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
         roles,
         infra,
         fullstack,
+        experimental: raw.tool.experimental,
     })
 }
 
@@ -386,6 +389,43 @@ mod tests {
                 "_infra/cardano-up"
             );
         }
+    }
+
+    #[test]
+    fn experimental_flag_defaults_false_and_marks_blaster() {
+        let reg = registry();
+        // Blaster is the current formal-methods experimental tool (work in progress).
+        assert!(
+            reg.get("blaster")
+                .expect("blaster should exist")
+                .experimental,
+            "blaster should be marked experimental"
+        );
+        // Released tools default to non-experimental (no flag needed in their TOML).
+        for id in ["aiken", "meshjs", "scalus", "yaci", "kupo"] {
+            assert!(
+                !reg.get(id).unwrap().experimental,
+                "{id} should not be experimental by default"
+            );
+        }
+    }
+
+    #[test]
+    fn experimental_defaults_false_when_flag_absent() {
+        let toml = r#"
+            [tool]
+            id = "demo"
+            name = "Demo"
+            description = "d"
+            website = "https://x"
+            languages = ["scala"]
+
+            [roles.on-chain]
+            template = "demo/on-chain"
+        "#;
+        let raw: ToolFileToml = toml::from_str(toml).unwrap();
+        let def = to_tool_def("demo.toml", raw).unwrap();
+        assert!(!def.experimental);
     }
 
     #[test]
