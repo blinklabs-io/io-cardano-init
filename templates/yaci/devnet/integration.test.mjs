@@ -55,7 +55,15 @@ const fileEnv = readEnv(envPath);
 const indexerUrl = (process.env.INDEXER_URL ?? fileEnv.INDEXER_URL ?? "").trim();
 const network = process.env.CARDANO_NETWORK || fileEnv.CARDANO_NETWORK || "preview";
 
+// When set, a devnet is mandatory: every graceful skip below becomes a hard
+// failure. The end-to-end CI smoke test sets this so a pass proves the seam
+// actually ran (see scripts/devnet-test.sh).
+const requireDevnet = (process.env.CARDANO_INIT_REQUIRE_DEVNET ?? "").trim() !== "";
+
 if (!indexerUrl) {
+  if (requireDevnet) {
+    fail("No INDEXER_URL, but CARDANO_INIT_REQUIRE_DEVNET is set — a live devnet was required.");
+  }
   skip("No INDEXER_URL in ../.env — no local devnet configured.");
   console.log("  Start one with:  just dev   (writes INDEXER_URL into ../.env)");
   console.log("  Skipping the devnet integration test.");
@@ -82,6 +90,9 @@ async function getJson(path) {
     }
   }
   // Still unreachable: the URL is likely stale (devnet not running). Degrade.
+  if (requireDevnet) {
+    fail(`Devnet required (CARDANO_INIT_REQUIRE_DEVNET) but unreachable at ${url} (${lastErr?.code ?? lastErr?.name ?? "error"}).`);
+  }
   skip(`Devnet not reachable at ${url} (${lastErr?.code ?? lastErr?.name ?? "error"}).`);
   console.log("  `just test` starts a devnet automatically; or run one with `just dev`.");
   console.log("  Skipping the devnet integration test.");

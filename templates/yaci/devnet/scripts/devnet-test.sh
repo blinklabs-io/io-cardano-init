@@ -8,6 +8,10 @@
 # the per-tool build/test smoke gate) stays green: the integration test then
 # runs with no devnet and skips itself.
 #
+# Set CARDANO_INIT_REQUIRE_DEVNET=1 to turn every graceful skip into a hard
+# failure. The end-to-end CI smoke test uses this so a green run proves the
+# devnet actually came up and the seam ran — never a vacuous skip.
+#
 # Invoked via `sh scripts/devnet-test.sh` (no exec bit; see the interface
 # contract). Yaci DevKit supports Linux x64 and macOS arm64 (not Windows).
 set -u
@@ -16,6 +20,11 @@ API_URL="http://localhost:8080/api/v1/"
 LOG=".yaci-devnet.log"
 
 if ! command -v yaci-devkit >/dev/null 2>&1; then
+  if [ -n "${CARDANO_INIT_REQUIRE_DEVNET:-}" ]; then
+    echo "✗ yaci-devkit is not installed, but CARDANO_INIT_REQUIRE_DEVNET is set."
+    echo "  Install it: npm install -g @bloxbean/yaci-devkit"
+    exit 1
+  fi
   echo "• yaci-devkit not installed — running the test without a devnet (it will skip)."
   echo "  Install it for the full integration test:"
   echo "  npm install -g @bloxbean/yaci-devkit"

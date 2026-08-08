@@ -1,0 +1,138 @@
+# End-to-end devnet smoke gate.
+#
+# Purpose: prove the one build-green role that no other job exercises — the
+# Yaci DevKit *devnet* — actually works end to end, and that the devnet↔off-chain
+# `.env` seam connects. Every other gate leaves this role untested:
+#   • scheduled-smoke.yml intentionally EXCLUDES yaci (its `just` targets that a
+#     no-op runner sees only echo), so nothing builds/tests the devnet role.
+#   • The template degrades gracefully — with no yaci-devkit installed, every
+#     layer skips and exits 0. Green, but proving nothing.
+#
+# This job installs yaci-devkit for real, scaffolds a fullstack project
+# (aiken on-chain → blueprint → meshjs off-chain → yaci devnet), and runs the
+# whole thing under CARDANO_INIT_REQUIRE_DEVNET=1, which turns every graceful
+# skip into a hard failure. So a green run here MEANS: the devnet came up, the
+# indexer served the chain, and the off-chain mint→lock→redeem round-trip
+# executed against it — never a vacuous skip.
+#
+# Like scheduled-smoke/installer-recipes, it depends on the live world (an npm
+# release, a cardano-node download), so it runs on a schedule + on demand, never
+# as an every-commit gate, and files a tracking issue on scheduled failure.
+
+name: devnet-smoke
+
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Mondays 08:00 UTC, after scheduled-smoke (06:00) and installer-recipes (07:00)
+  workflow_dispatch: {} # allow manual runs
+  # Opt-in per-PR run: add the `run-devnet-smoke` label to a PR to run this
+  # (heavy, world-dependent) gate against that PR's code. Re-add to re-run.
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  devnet:
+    name: yaci devnet end-to-end
+    # Schedule and manual runs always run; PR runs only for our opt-in label
+    # (a `labeled` event fires for every label, so filter to ours).
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-devnet-smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      # Off-chain (meshjs) + the yaci-devkit CLI both run on Node.
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      # yaci-cli / yaci-store are JVM services; the devkit needs a JDK on PATH.
+      - name: Install JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Aiken
+        uses: aiken-lang/setup-aiken@v1
+        with:
+          # Keep this in lockstep with templates/aiken/on-chain/aiken.toml.jinja.
+          version: v1.1.21
+
+      - name: Install yaci-devkit
+        run: npm install -g @bloxbean/yaci-devkit
+
+      # The first `yaci-devkit up` downloads a cardano-node into ~/.yaci-cli;
+      # cache it so subsequent runs skip the (large) download.
+      - name: Cache yaci-cli node download
+        uses: actions/cache@v4
+        with:
+          path: ~/.yaci-cli
+          key: yaci-cli-${{ runner.os }}
+
+      - name: Scaffold a fullstack project in isolation
+        run: cargo run --quiet -- --name devnet-smoke --on-chain aiken --off-chain meshjs --devnet yaci
+
+      - name: Build & run the end-to-end devnet smoke
+        working-directory: devnet-smoke
+        # CARDANO_INIT_REQUIRE_DEVNET=1 makes every graceful skip a hard failure,
+        # so this cannot pass vacuously. `just build` produces the on-chain
+        # blueprint and installs off-chain deps; `just test` builds the blueprint
+        # first, then the devnet component spins up an ephemeral devnet and runs
+        # its integration test + the off-chain round-trip against it (guaranteed
+        # teardown via trap).
+        env:
+          CARDANO_INIT_REQUIRE_DEVNET: "1"
+        run: |
+          just build
+          just test
+
+  notify-on-failure:
+    needs: devnet
+    # Only file an issue for the unattended scheduled run, not manual debugging.
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const label = "devnet-smoke";
+            const title = "Devnet smoke failed: the Yaci devnet no longer works end to end";
+            const today = new Date().toISOString().slice(0, 10);
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The weekly devnet end-to-end smoke failed on ${today}.`,
+              ``,
+              `A scaffolded fullstack project's devnet↔off-chain seam stopped working —`,
+              `likely a breaking yaci-devkit release, a cardano-node download/boot`,
+              `failure, or upstream drift in the off-chain provider. The run log shows`,
+              `which stage failed (devnet boot, indexer liveness, or the round-trip).`,
+              ``,
+              `Run: ${runUrl}`,
+            ].join("\n");
+
+            // De-dupe: comment on the existing open issue instead of spamming a
+            // new one every Monday. (Creating an issue auto-creates the label.)
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: "open", labels: label,
+            });
+            if (existing.data.length === 0) {
+              await github.rest.issues.create({ owner, repo, title, body, labels: [label] });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.data[0].number, body,
+              });
+            }
