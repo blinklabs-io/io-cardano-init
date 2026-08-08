@@ -1298,6 +1298,24 @@ const indexerUrl = (process.env.INDEXER_URL ?? "").trim();
 const adminUrl = (process.env.YACI_ADMIN_URL ?? "http://localhost:10000").trim();
 const canRun = indexerUrl !== "" && hasBundledBlueprint();
 
+// When set (by the end-to-end CI smoke test), a skip is a failure — but only
+// once a devnet is actually live (INDEXER_URL set). The top-level `just test`
+// also runs this suite standalone with no devnet (blank INDEXER_URL) before the
+// devnet phase; that skip is expected and must stay green. So strict mode fails
+// only when the devnet is up yet the round-trip still can't run (e.g. the
+// on-chain blueprint wasn't bundled) — a real, actionable breakage.
+const requireDevnet = (process.env.CARDANO_INIT_REQUIRE_DEVNET ?? "").trim() !== "";
+
+if (requireDevnet && indexerUrl !== "" && !hasBundledBlueprint()) {
+  describe("GiftCard round-trip on a Yaci devnet", () => {
+    it("must run under CARDANO_INIT_REQUIRE_DEVNET (devnet is live)", () => {
+      throw new Error(
+        "Devnet is live but no bundled blueprint — build the on-chain component first.",
+      );
+    });
+  });
+}
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Poll `fn` until `ok(result)` or we run out of tries. */
