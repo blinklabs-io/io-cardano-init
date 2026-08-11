@@ -338,8 +338,8 @@ pub fn plan(selection: &Selection, registry: &Registry) -> Result<FilePlan, Scaf
         });
         entries.push(FileEntry {
             dest: PathBuf::from(".envrc"),
-            source: TemplateSource::Inline(b"use flake\n".to_vec()),
-            render: false,
+            source: TemplateSource::Optional("_nix/envrc.jinja".into()),
+            render: true,
         });
     }
 

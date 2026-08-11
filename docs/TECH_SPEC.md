@@ -333,7 +333,7 @@ Determinism note: any consumer that emits tools/roles must sort (§11), since `b
 3. **Role layers**: assignments processed in **`Role::ALL` order** (not flag order). For each, read the template manifest and append its files (rendered per §4.2). Two roles aggregate instead of emitting per-assignment:
    - **Fullstack collapses**: when the same tool fills on-chain + off-chain and declares a `[fullstack]` template (§3.4), the two assignments emit **one** `protocol/` component from the `[fullstack]` template, emitted **once** on the first of the pair (on-chain sorts first in `Role::ALL`), the off-chain assignment is skipped. `has_on_chain`/`has_off_chain` are false; `has_fullstack` is true. Because both assignments remain in the selection, the blueprint predicate (§6.2) is unchanged.
    - **Infrastructure aggregates**: all selected infra tools share one driver template (`_infra/cardano-up`), emitted **once** at `infra/` on the first infra assignment (the rest are contiguous after the canonical sort and skipped); they are still sorted by `tool_id` for the rendered `infra_tools`/`infra_env` order (§11). All infra tools must resolve to the same template path, else `ScaffoldError::InfraTemplateMismatch`.
-4. **Optional layer**: if `nix`, `flake.nix` (rendered) + `.envrc` (`Inline "use flake\n"`).
+4. **Optional layer**: if `nix`, `flake.nix` (rendered) + `.envrc` (rendered from `_nix/envrc.jinja`; `use flake`, plus — when the top-level flake composes a `nix_self_contained` component — a `NIX_CONFIG` pre-accept for its `nixConfig` and a source-build heads-up when the IOG cache isn't trusted).
 
 `--dry-run` returns this `FilePlan` (no rendering, no I/O).
 

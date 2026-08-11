@@ -2987,5 +2987,21 @@ async function confirmed(
 }
 
 === .envrc ===
+# A composed component flake (haskell.nix) declares extra binary caches in its
+# nixConfig. Pre-accept it so `direnv allow` and nix run non-interactively — no
+# y/N trust prompt — which matters for CI and agents. This only silences the
+# prompt; whether those caches are actually used still depends on the machine
+# trusting them (a trusted Nix user, or the substituters in the system
+# nix.conf). Untrusted users simply skip them and fall back to their configured
+# caches (e.g. a system-wide cache.iog.io) or build from source.
+export NIX_CONFIG="accept-flake-config = true"
+
+# If this machine doesn't trust the IOG binary cache, the Haskell toolchain
+# (GHC, HLS, the Plutus stack) is built from source on first entry — which can
+# take a very long time. Warn up front so a long silent wait isn't a surprise.
+if ! { nix config show 2>/dev/null || nix show-config 2>/dev/null; } | grep -Eq '^substituters =.*cache\.iog\.io'; then
+  echo "[snap-project] cache.iog.io is not a trusted substituter on this machine — the Haskell toolchain will build from source, which can take a very long time." >&2
+  echo "[snap-project] To use prebuilt binaries: become a trusted Nix user, or add the substituters/keys from on-chain/flake.nix (nixConfig) to your system nix.conf, then reload." >&2
+fi
 use flake
 
