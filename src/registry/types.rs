@@ -154,6 +154,14 @@ pub struct ToolDef {
     /// entry. Consumed by the dependency doctor (TECH_SPEC §9.1).
     pub system_deps: Vec<String>,
     pub nix_packages: Vec<String>,
+    /// When `true`, this tool ships its own component-local Nix flake (emitted
+    /// under `--nix` via a manifest `when = "nix"` guard). Its `nix_packages`
+    /// are *not* folded into the top-level shell as bare nixpkgs attrs — a plain
+    /// `mkShell` cannot build such a tool (e.g. Plinth needs haskell.nix + CHaP).
+    /// Instead the top-level flake references the component as a `path:` input
+    /// and pulls its dev shell in via `inputsFrom`, so the toolchain composes
+    /// into the root shell. Defaults to `false`.
+    pub nix_self_contained: bool,
     /// Signatures that identify this tool's generated output. Used by `doctor`
     /// to recognize the tool in a scanned project. Only tools that declare a
     /// role are candidates for that role's directory, which resolves

@@ -1,0 +1,26 @@
+# On-chain component (Plinth)
+# Part of {{ project_name }}
+#
+# Plinth (formerly PlutusTx) is ordinary Haskell that the GHC plugin compiles to
+# Plutus Core. `build` runs the blueprint generator, which serialises the
+# compiled validators into the CIP-57 blueprint at ../{{ blueprint_path }} for the
+# off-chain / devnet / formal components to consume.
+#
+# The Plutus dependencies come from IOG's package repository (CHaP), configured
+# in cabal.project. The first build needs a package index, so `build` runs
+# `cabal update` for you; it's a fast no-op once the index is current.
+
+# Compile the validators and write the CIP-57 blueprint to ../{{ blueprint_path }}.
+build:
+    cabal update
+    cabal build all
+    cabal run -v0 gen-blueprint -- ../{{ blueprint_path }}
+
+# Compile both validators to Plutus Core and assert they serialise — the plugin
+# does the on-chain compilation, so this catches errors a plain build might defer.
+test:
+    cabal test all
+
+clean:
+    cabal clean
+    rm -f ../{{ blueprint_path }}

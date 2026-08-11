@@ -76,6 +76,29 @@ struct ManifestMeta {
 struct ManifestFile {
     source: String,
     dest: String,
+    /// Optional emission guard. When present, the file is emitted only if the
+    /// named condition holds for the current selection (e.g. `when = "nix"`
+    /// emits only under `--nix`). Absent ⇒ always emitted.
+    #[serde(default)]
+    when: Option<FileCondition>,
+}
+
+/// A condition gating whether a manifest file is emitted. Deserialized from the
+/// kebab-case `when` field in `manifest.toml`.
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum FileCondition {
+    /// Emit only when the project is generated with Nix support (`--nix`).
+    Nix,
+}
+
+impl FileCondition {
+    /// Whether this condition holds for the given selection.
+    fn holds(&self, selection: &Selection) -> bool {
+        match self {
+            FileCondition::Nix => selection.nix,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +314,12 @@ pub fn plan(selection: &Selection, registry: &Registry) -> Result<FilePlan, Scaf
             })?;
 
         for file in &manifest.files {
+            // Honor an optional emission guard (e.g. `when = "nix"`).
+            if let Some(cond) = &file.when
+                && !cond.holds(selection)
+            {
+                continue;
+            }
             validate_dest(&file.dest)?;
             entries.push(FileEntry {
                 dest: dest_prefix.join(&file.dest),

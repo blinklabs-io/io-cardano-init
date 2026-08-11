@@ -526,14 +526,14 @@ mod tests {
         let ctx = err.context();
         assert_eq!(ctx["tool_id"], "bogus");
         assert_eq!(ctx["role"], "On-chain");
-        // on-chain is fillable by aiken + scalus.
+        // on-chain is fillable by aiken + plinth + scalus.
         let valid: Vec<&str> = ctx["valid_tools"]
             .as_array()
             .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        assert_eq!(valid, vec!["aiken", "scalus"]);
+        assert_eq!(valid, vec!["aiken", "plinth", "scalus"]);
     }
 
     #[test]

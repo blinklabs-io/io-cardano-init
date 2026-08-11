@@ -24,6 +24,7 @@ website     = "https://mytool.dev"
 languages   = ["typescript"]           # Languages the generated project uses
 system_deps = ["mytool-cli"]           # What the user needs installed (drives `doctor`; each id needs a registry/deps.toml entry)
 nix_packages = ["mytool"]              # Nix package name(s), if available (omit if none)
+# nix_self_contained = true            # optional; set if the template ships its own component flake (keeps nix_packages out of the top-level shell — see The manifest)
 detect      = ["mytool.config.js"]     # How `doctor` recognizes this tool in a scanned project (see below)
 
 [roles.off-chain]                      # The role this tool fills
@@ -106,7 +107,16 @@ dest   = "src/index.ts"
 [[files]]
 source = "package.json.jinja"
 dest   = "package.json"
+
+[[files]]
+source = "flake.nix.jinja"     # optional: `when` gates emission on the selection
+dest   = "flake.nix"           # `when = "nix"` ⇒ emit only under `--nix`
+when   = "nix"
 ```
+
+A file may carry an optional `when` guard. The only condition today is `when = "nix"`, which emits the file only when the project is generated with `--nix`. Use it to ship a component-local Nix flake — as the Plinth on-chain template does, bundling the recommended haskell.nix setup from `IntersectMBO/plinth-template`. A tool that does this should also set `nix_self_contained = true` in its registry entry. Its `nix_packages` are then not listed as bare attributes in the top-level dev shell (a plain nixpkgs `mkShell` cannot build a haskell.nix project); instead the top-level flake adds the component as a `path:./<dir>` input and composes its dev shell via `inputsFrom`, so the toolchain — and `just build` for that component — is available from the project root.
+
+**Commit the `flake.lock`.** A component flake must also ship a pinned `flake.lock` (emit it with `when = "nix"`). Without it, inputs resolve at HEAD — for haskell.nix that is frequently broken (e.g. a missing bootstrap-GHC attribute) and never reproducible. Vendor a known-good lock (Plinth's is taken verbatim from upstream) and keep it consistent with `cabal.project`'s `index-state`.
 
 Whether a file is rendered through MiniJinja is determined solely by its source filename: files ending in `.jinja` are rendered, all others are copied verbatim. Name a file `foo.jinja` when it contains template variables or conditional blocks; leave it without the extension when it should be copied byte-for-byte (source code, lock files, binary assets, or any file whose content contains `{{` or `{%` as literal syntax).
 

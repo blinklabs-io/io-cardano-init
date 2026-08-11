@@ -1,0 +1,96 @@
+module Main where
+
+import AuctionValidator (AuctionParams, AuctionDatum, AuctionRedeemer, auctionValidatorScript)
+import AuctionMintingPolicy (AuctionMintingParams, auctionMintingPolicyScript)
+import Demo (demoAuctionParams, demoSellerPkh)
+import Data.ByteString.Short qualified as Short
+import Data.Set qualified as Set
+import PlutusLedgerApi.Common (serialiseCompiledCode)
+import PlutusTx.Blueprint
+import System.Environment (getArgs)
+
+-- | The combined CIP-57 blueprint: one contract exposing both the auction
+-- spending validator and the minting policy for the token being auctioned.
+contractBlueprint :: ContractBlueprint
+contractBlueprint =
+  MkContractBlueprint
+    { contractId = Just "auction"
+    , contractPreamble = preamble
+    , contractValidators = Set.fromList [auctionValidator, mintingPolicyValidator]
+    , contractDefinitions =
+        deriveDefinitions @[AuctionParams, AuctionDatum, AuctionRedeemer, AuctionMintingParams, ()]
+    }
+
+preamble :: Preamble
+preamble =
+  MkPreamble
+    { preambleTitle = "{{ project_name }} auction"
+    , preambleDescription =
+        Just "Blueprint for the auction validator and its minting policy"
+    , preambleVersion = "1.0.0"
+    , preamblePlutusVersion = PlutusV3
+    , preambleLicense = Just "Apache-2.0"
+    }
+
+auctionValidator :: ValidatorBlueprint referencedTypes
+auctionValidator =
+  MkValidatorBlueprint
+    { validatorTitle = "Auction Validator"
+    , validatorDescription =
+        Just "Plutus script validating auction transactions"
+    , validatorParameters =
+        [ MkParameterBlueprint
+            { parameterTitle = Just "Parameters"
+            , parameterDescription = Just "Compile-time validator parameters"
+            , parameterPurpose = Set.singleton Spend
+            , parameterSchema = definitionRef @AuctionParams
+            }
+        ]
+    , validatorRedeemer =
+        MkArgumentBlueprint
+          { argumentTitle = Just "Redeemer"
+          , argumentDescription = Just "Either a new bid or a request to pay out"
+          , argumentPurpose = Set.fromList [Spend]
+          , argumentSchema = definitionRef @AuctionRedeemer
+          }
+    , validatorDatum = Nothing
+    , validatorCompiled = do
+        let code = Short.fromShort (serialiseCompiledCode (auctionValidatorScript demoAuctionParams))
+        Just (compiledValidator PlutusV3 code)
+    }
+
+mintingPolicyValidator :: ValidatorBlueprint referencedTypes
+mintingPolicyValidator =
+  MkValidatorBlueprint
+    { validatorTitle = "Auction Minting Policy"
+    , validatorDescription =
+        Just "Mints the single token being auctioned"
+    , validatorParameters =
+        [ MkParameterBlueprint
+            { parameterTitle = Just "Minting Policy Parameters"
+            , parameterDescription = Just "Compile-time validator parameters"
+            , parameterPurpose = Set.singleton Mint
+            , parameterSchema = definitionRef @AuctionMintingParams
+            }
+        ]
+    , validatorRedeemer =
+        MkArgumentBlueprint
+          { argumentTitle = Just "Redeemer"
+          , argumentDescription = Just "The minting policy does not use a redeemer, hence ()"
+          , argumentPurpose = Set.fromList [Mint]
+          , argumentSchema = definitionRef @()
+          }
+    , validatorDatum = Nothing
+    , validatorCompiled = do
+        let code = Short.fromShort (serialiseCompiledCode (auctionMintingPolicyScript demoSellerPkh))
+        Just (compiledValidator PlutusV3 code)
+    }
+
+writeBlueprintToFile :: FilePath -> IO ()
+writeBlueprintToFile path = writeBlueprint path contractBlueprint
+
+main :: IO ()
+main =
+  getArgs >>= \case
+    [arg] -> writeBlueprintToFile arg
+    args -> fail $ "Expects one argument (output path), got " <> show (length args)

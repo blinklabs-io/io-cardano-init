@@ -46,6 +46,18 @@ binaries = ["docker"]
 docs = "https://docs.docker.com/get-docker/"
 install = [{ brew = "docker" }, { apt = "docker.io" }, { winget = "Docker.DockerDesktop" }, { nix = "docker" }]
 
+[cabal]
+binaries = ["cabal"]
+docs = "https://www.haskell.org/ghcup/"
+# ghcup (via curl) is IOG's recommended way to get a matching GHC + Cabal.
+install = [{ brew = "cabal-install" }, { apt = "cabal-install" }, { nix = "cabal-install" }, { curl = "https://get-ghcup.haskell.org" }]
+
+[ghc]
+binaries = ["ghc"]
+docs = "https://www.haskell.org/ghcup/"
+# Plinth currently targets GHC 9.6.x; ghcup lets you pin that series.
+install = [{ brew = "ghc" }, { apt = "ghc" }, { nix = "haskell.compiler.ghc966" }, { curl = "https://get-ghcup.haskell.org" }]
+
 # --- installer-provider deps (reached via installer `bootstrap` lists) ---
 
 [aikup]

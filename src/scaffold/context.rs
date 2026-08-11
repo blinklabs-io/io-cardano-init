@@ -83,6 +83,12 @@ pub struct TemplateContext {
 
     pub nix: bool,
     pub nix_packages: Vec<String>,
+    /// Component directories whose tool ships its own Nix flake
+    /// (`nix_self_contained`). The top-level flake references each as a
+    /// `path:./<dir>` input and pulls its dev shell in via `inputsFrom`, so the
+    /// whole toolchain composes into the root shell. Canonical (`Role::ALL`)
+    /// order, deduped. Empty unless a self-contained tool is selected.
+    pub nix_component_flakes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +117,8 @@ pub fn build_context(
     let mut devnet = None;
     let mut formal_methods = None;
     let mut nix_packages = Vec::new();
+    // (canonical index, component dir) for tools shipping their own flake.
+    let mut nix_flake_components: Vec<(usize, String)> = Vec::new();
 
     // When one tool fills both on-chain and off-chain via a `[fullstack]` template,
     // the two collapse into a single `protocol/` component. Derived here (and in
@@ -132,9 +140,31 @@ pub fn build_context(
             });
         }
 
-        for pkg in &tool.nix_packages {
-            if !nix_packages.contains(pkg) {
-                nix_packages.push(pkg.clone());
+        // A self-contained tool ships its own component-local flake (emitted
+        // under `--nix`), so its packages must not pollute the naive top-level
+        // shell, which cannot build it. See `ToolDef::nix_self_contained`.
+        if !tool.nix_self_contained {
+            for pkg in &tool.nix_packages {
+                if !nix_packages.contains(pkg) {
+                    nix_packages.push(pkg.clone());
+                }
+            }
+        } else if assignment.role != Role::Infrastructure {
+            // Self-contained tool: record its component dir so the top-level
+            // flake composes that component's own dev shell (`inputsFrom`).
+            let is_fullstack_member = fullstack_id.as_deref() == Some(assignment.tool_id.as_str())
+                && matches!(assignment.role, Role::OnChain | Role::OffChain);
+            let dir = if is_fullstack_member {
+                contract::DIR_PROTOCOL.to_string()
+            } else {
+                assignment.role.dir().to_string()
+            };
+            let idx = Role::ALL
+                .iter()
+                .position(|r| *r == assignment.role)
+                .expect("role is in Role::ALL");
+            if !nix_flake_components.iter().any(|(_, d)| *d == dir) {
+                nix_flake_components.push((idx, dir));
             }
         }
 
@@ -258,6 +288,14 @@ pub fn build_context(
 
         nix: selection.nix,
         nix_packages,
+        nix_component_flakes: {
+            // Canonical (Role::ALL) order; dirs already deduped above.
+            nix_flake_components.sort_by_key(|(idx, _)| *idx);
+            nix_flake_components
+                .into_iter()
+                .map(|(_, dir)| dir)
+                .collect()
+        },
     })
 }
 
