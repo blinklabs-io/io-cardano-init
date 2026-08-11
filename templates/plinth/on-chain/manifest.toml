@@ -1,5 +1,5 @@
 [manifest]
-summary = "Plinth on-chain project: Haskell validators (an auction spending validator + minting policy) compiled to Plutus Core, writing a combined CIP-57 blueprint to ../blueprint/plutus.json"
+summary = "Plinth on-chain project: the GiftCard example in Haskell (a one-shot minting policy + redeem spending validator) compiled to Plutus Core, writing a combined CIP-57 blueprint to ../blueprint/plutus.json"
 
 [[files]]
 source = "Justfile.jinja"
@@ -18,16 +18,12 @@ source = ".gitignore"
 dest = ".gitignore"
 
 [[files]]
-source = "src/AuctionValidator.hs"
-dest = "src/AuctionValidator.hs"
+source = "src/GiftCardMintingPolicy.hs"
+dest = "src/GiftCardMintingPolicy.hs"
 
 [[files]]
-source = "src/AuctionMintingPolicy.hs"
-dest = "src/AuctionMintingPolicy.hs"
-
-[[files]]
-source = "src/Demo.hs"
-dest = "src/Demo.hs"
+source = "src/RedeemValidator.hs"
+dest = "src/RedeemValidator.hs"
 
 [[files]]
 source = "app/GenBlueprint.hs.jinja"

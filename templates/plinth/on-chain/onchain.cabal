@@ -58,9 +58,8 @@ library
   hs-source-dirs:  src
   build-depends:   base
   exposed-modules:
-    AuctionMintingPolicy
-    AuctionValidator
-    Demo
+    GiftCardMintingPolicy
+    RedeemValidator
 
 -- Serialises the compiled validators into a single CIP-57 blueprint.
 executable gen-blueprint

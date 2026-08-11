@@ -234,9 +234,8 @@ library
   hs-source-dirs:  src
   build-depends:   base
   exposed-modules:
-    AuctionMintingPolicy
-    AuctionValidator
-    Demo
+    GiftCardMintingPolicy
+    RedeemValidator
 
 -- Serialises the compiled validators into a single CIP-57 blueprint.
 executable gen-blueprint
@@ -306,438 +305,267 @@ result
 result-*
 .direnv/
 
-=== on-chain/src/AuctionValidator.hs ===
-module AuctionValidator where
+=== on-chain/src/GiftCardMintingPolicy.hs ===
+{-# LANGUAGE NoImplicitPrelude #-}
 
-import GHC.Generics (Generic)
+module GiftCardMintingPolicy where
 
-import PlutusCore.Version (plcVersion110)
-import PlutusLedgerApi.V3 (CurrencySymbol, Datum (..), Lovelace, OutputDatum (..),
-                           POSIXTime, PubKeyHash, ScriptContext (..), TokenName, TxInfo (..),
-                           TxOut (..), from, to, ScriptInfo (..), Redeemer (..), getRedeemer)
-import PlutusLedgerApi.V3.Contexts (getContinuingOutputs)
-import PlutusLedgerApi.V1.Address (toPubKeyHash)
-import PlutusLedgerApi.V1.Interval (contains)
-import PlutusLedgerApi.V1.Value (lovelaceValueOf, valueOf)
-import PlutusTx
-import PlutusTx.AsData qualified as PlutusTx
-import PlutusTx.Blueprint
-import PlutusTx.Prelude qualified as PlutusTx
-import PlutusTx.Show qualified as PlutusTx
-import PlutusTx.List qualified as List
+import           GHC.Generics             (Generic)
 
-data AuctionParams = AuctionParams
-  { apSeller         :: PubKeyHash
-  -- ^ Seller's public key hash. The highest bid (if exists) will be sent to the seller.
-  -- If there is no bid, the asset auctioned will be sent to the seller.
-  , apCurrencySymbol :: CurrencySymbol
-  -- ^ The currency symbol of the token being auctioned.
-  , apTokenName      :: TokenName
-  -- ^ The name of the token being auctioned.
-  -- These can all be encoded as a `Value`.
-  , apMinBid         :: Lovelace
-  -- ^ The minimum bid in Lovelace.
-  , apEndTime        :: POSIXTime
-  -- ^ The deadline for placing a bid. This is the earliest time the auction can be closed.
-  }
+import           PlutusLedgerApi.V1.Value (Value, flattenValue)
+import           PlutusLedgerApi.V3       (CurrencySymbol, ScriptContext (..),
+                                           ScriptInfo (..), TokenName (..),
+                                           TxInInfo (..), TxInfo (..), TxOutRef,
+                                           getRedeemer, mintValueBurned,
+                                           mintValueMinted)
+import           PlutusTx
+-- Hide the blueprint 'Mint' *purpose* so it doesn't clash with our redeemer's constructor
+import           PlutusTx.Blueprint       hiding (Mint)
+import qualified PlutusTx.List            as List
+import           PlutusTx.Prelude
+
+{- | Redeemer for the gift-card minting policy: mint the one-shot token, or burn
+it. Encoded as @Constr 0 []@ / @Constr 1 []@, matching what the off-chain side
+supplies as the mint redeemer.
+-}
+data GiftCardAction = Mint | Burn
   deriving stock (Generic)
   deriving anyclass (HasBlueprintDefinition)
 
-PlutusTx.makeLift ''AuctionParams
-PlutusTx.makeIsDataSchemaIndexed ''AuctionParams [('AuctionParams, 0)]
+makeIsDataSchemaIndexed ''GiftCardAction [('Mint, 0), ('Burn, 1)]
 
-data Bid = Bid
-  { bAddr   :: PlutusTx.BuiltinByteString
-  -- ^ Bodder's wallet address
-  , bPkh    :: PubKeyHash
-  -- ^ Bidder's public key hash.
-  , bAmount :: Lovelace
-  -- ^ Bid amount in Lovelace.
-  }
-  deriving stock (Generic)
-  deriving anyclass (HasBlueprintDefinition)
+{-# INLINEABLE giftCardTypedMintingPolicy #-}
 
-PlutusTx.deriveShow ''Bid
-PlutusTx.makeIsDataSchemaIndexed ''Bid [('Bid, 0)]
-
-instance PlutusTx.Eq Bid where
-  {-# INLINEABLE (==) #-}
-  bid == bid' =
-    bPkh bid
-      PlutusTx.== bPkh bid'
-      PlutusTx.&& bAmount bid
-      PlutusTx.== bAmount bid'
-
-{- | Datum represents the state of a smart contract. In this case
-it contains the highest bid so far (if exists).
+{- | One-shot minting policy parameterised by the gift-card token name and a seed
+UTxO. Minting requires that seed UTxO to be spent (making the token unique) and
+mints exactly one token of the given name; burning requires exactly one to be
+burned. The policy id (own currency symbol) comes from the V3 script info.
 -}
-newtype AuctionDatum = AuctionDatum {adHighestBid :: Maybe Bid}
-  deriving stock (Generic)
-  deriving newtype
-    ( HasBlueprintDefinition
-    , PlutusTx.ToData
-    , PlutusTx.FromData
-    , PlutusTx.UnsafeFromData
-    )
-
-{- | Redeemer is the input that changes the state of a smart contract.
-In this case it is either a new bid, or a request to close the auction
-and pay out the seller and the highest bidder.
--}
-data AuctionRedeemer = NewBid Bid | Payout
-  deriving stock (Generic)
-  deriving anyclass (HasBlueprintDefinition)
-
-PlutusTx.makeIsDataSchemaIndexed ''AuctionRedeemer [('NewBid, 0), ('Payout, 1)]
-
-{-# INLINEABLE auctionTypedValidator #-}
-
-{- | Given the auction parameters, determines whether the transaction is allowed to
-spend the UTXO. V3 validator extracts datum and redeemer from ScriptContext.
--}
-auctionTypedValidator ::
-  AuctionParams ->
+giftCardTypedMintingPolicy ::
+  BuiltinByteString ->
+  TxOutRef ->
   ScriptContext ->
   Bool
-auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo) =
-  List.and conditions
+giftCardTypedMintingPolicy tokenNameBytes seed (ScriptContext txInfo scriptRedeemer scriptInfo) =
+  case action of
+    Mint -> seedSpent && exactlyOne (mintValueMinted (txInfoMint txInfo))
+    Burn -> exactlyOne (mintValueBurned (txInfoMint txInfo))
   where
-    -- Extract redeemer from script context
-    redeemer :: AuctionRedeemer
-    redeemer = case PlutusTx.fromBuiltinData (getRedeemer scriptRedeemer) of
-      Nothing -> PlutusTx.traceError "Failed to parse AuctionRedeemer"
-      Just r  -> r
+    action :: GiftCardAction
+    action = case fromBuiltinData (getRedeemer scriptRedeemer) of
+      Just a  -> a
+      Nothing -> traceError "gift_card: invalid redeemer"
 
-    -- Extract datum from script context
-    highestBid :: Maybe Bid
-    highestBid = case scriptInfo of
-      SpendingScript _ (Just (Datum datum)) ->
-        case PlutusTx.fromBuiltinData datum of
-          Just (AuctionDatum bid) -> bid
-          Nothing -> PlutusTx.traceError "Failed to parse AuctionDatum"
-      _ -> PlutusTx.traceError "Expected SpendingScript with datum"
+    ownCurrencySymbol :: CurrencySymbol
+    ownCurrencySymbol = case scriptInfo of
+      MintingScript cs -> cs
+      _                -> traceError "gift_card: not a minting script"
 
-    conditions :: [Bool]
-    conditions = case redeemer of
-      NewBid bid ->
-        [ -- The new bid must be higher than the highest bid.
-          -- If this is the first bid, it must be at least as high as the minimum bid.
-          sufficientBid bid
-        , -- The bid is not too late.
-          validBidTime
-        , -- The previous highest bid should be refunded.
-          refundsPreviousHighestBid
-        , -- A correct new datum is produced, containing the new highest bid.
-          correctOutput bid
-        ]
-      Payout ->
-        [ -- The payout is not too early.
-          validPayoutTime
-        , -- The seller gets the highest bid.
-          sellerGetsHighestBid
-        , -- The highest bidder gets the asset.
-          highestBidderGetsAsset
-        ]
-    sufficientBid :: Bid -> Bool
-    sufficientBid (Bid _ _ amt) = case highestBid of
-      Just (Bid _ _ amt') -> amt PlutusTx.> amt'
-      Nothing             -> amt PlutusTx.>= apMinBid params
-    validBidTime :: Bool
-    ~validBidTime = to (apEndTime params) `contains` txInfoValidRange txInfo
-    refundsPreviousHighestBid :: Bool
-    ~refundsPreviousHighestBid = case highestBid of
-      Nothing -> True
-      Just (Bid _ bidderPkh amt) ->
-        case List.find
-          ( \o ->
-              (toPubKeyHash (txOutAddress o) PlutusTx.== Just bidderPkh)
-                PlutusTx.&& (lovelaceValueOf (txOutValue o) PlutusTx.== amt)
-          )
-          (txInfoOutputs txInfo) of
-          Just _  -> True
-          Nothing -> PlutusTx.traceError "Not found: refund output"
-    currencySymbol :: CurrencySymbol
-    currencySymbol = apCurrencySymbol params
+    -- The (token name, quantity) entries of this policy in the given value.
+    ownEntries :: Value -> [(TokenName, Integer)]
+    ownEntries value =
+      List.map (\(_, tn, amt) -> (tn, amt))
+        (List.filter (\(cs, _, _) -> cs == ownCurrencySymbol) (flattenValue value))
 
-    tokenName :: TokenName
-    tokenName = apTokenName params
+    -- Exactly one token of this policy, named `token_name`, quantity one. For a
+    -- burn, `mintValueBurned` reports the burned amount as a positive quantity.
+    exactlyOne :: Value -> Bool
+    exactlyOne value = case ownEntries value of
+      [(tn, amt)] -> tn == TokenName tokenNameBytes && amt == 1
+      _           -> False
 
-    correctOutput :: Bid -> Bool
-    correctOutput bid = case getContinuingOutputs ctx of
-      [o] ->
-        let correctOutputDatum = case txOutDatum o of
-              OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
-                Just (AuctionDatum (Just bid')) ->
-                  PlutusTx.traceIfFalse
-                    "Invalid output datum: contains a different Bid than expected"
-                    (bid PlutusTx.== bid')
-                Just (AuctionDatum Nothing) ->
-                  PlutusTx.traceError "Invalid output datum: expected Just Bid, got Nothing"
-                Nothing ->
-                  PlutusTx.traceError "Failed to decode output datum"
-              OutputDatumHash _ ->
-                PlutusTx.traceError "Expected OutputDatum, got OutputDatumHash"
-              NoOutputDatum ->
-                PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum"
+    -- The parameterised seed UTxO is among this transaction's inputs. Marked
+    -- lazy (`~`) so the strict-by-default 'Strict' extension doesn't force it
+    -- on the 'Burn' path, which never inspects the inputs.
+    seedSpent :: Bool
+    ~seedSpent =
+      List.any (\txIn -> txInInfoOutRef txIn == seed) (txInfoInputs txInfo)
 
-            outValue = txOutValue o
-
-            correctOutputValue =
-              (lovelaceValueOf outValue PlutusTx.== bAmount bid)
-                PlutusTx.&& (valueOf outValue currencySymbol tokenName PlutusTx.== 1)
-         in correctOutputDatum PlutusTx.&& correctOutputValue
-      os ->
-        PlutusTx.traceError
-          ( "Expected exactly one continuing output, got "
-              PlutusTx.<> PlutusTx.show (List.length os)
-          )
-    validPayoutTime :: Bool
-    ~validPayoutTime = from (apEndTime params) `contains` txInfoValidRange txInfo
-
-    sellerGetsHighestBid :: Bool
-    ~sellerGetsHighestBid = case highestBid of
-      Nothing -> True
-      Just bid ->
-        case List.find
-          ( \o ->
-              (toPubKeyHash (txOutAddress o) PlutusTx.== Just (apSeller params))
-                PlutusTx.&& (lovelaceValueOf (txOutValue o) PlutusTx.== bAmount bid)
-          )
-          (txInfoOutputs txInfo) of
-          Just _  -> True
-          Nothing -> PlutusTx.traceError "Not found: Output paid to seller"
-
-    highestBidderGetsAsset :: Bool
-    ~highestBidderGetsAsset =
-      let highestBidder = case highestBid of
-            -- If there are no bids, the asset should go back to the seller
-            Nothing  -> apSeller params
-            Just bid -> bPkh bid
-       in case List.find
-            ( \o ->
-                (toPubKeyHash (txOutAddress o) PlutusTx.== Just highestBidder)
-                  PlutusTx.&& (valueOf (txOutValue o) currencySymbol tokenName PlutusTx.== 1)
-            )
-            (txInfoOutputs txInfo) of
-            Just _  -> True
-            Nothing -> PlutusTx.traceError "Not found: Output paid to highest bidder"
-
-{-# INLINEABLE auctionUntypedValidator #-}
-auctionUntypedValidator ::
-  AuctionParams ->
-  BuiltinData ->
-  PlutusTx.BuiltinUnit
-auctionUntypedValidator params ctx =
-  PlutusTx.check
-    ( auctionTypedValidator
-        params
-        (PlutusTx.unsafeFromBuiltinData ctx)
+{-# INLINEABLE giftCardUntypedMintingPolicy #-}
+giftCardUntypedMintingPolicy ::
+  BuiltinData -> BuiltinData -> BuiltinData -> BuiltinUnit
+giftCardUntypedMintingPolicy tokenName seed ctx =
+  check
+    ( giftCardTypedMintingPolicy
+        (unsafeFromBuiltinData tokenName)
+        (unsafeFromBuiltinData seed)
+        (unsafeFromBuiltinData ctx)
     )
 
-auctionValidatorScript ::
-  AuctionParams ->
-  CompiledCode (BuiltinData -> PlutusTx.BuiltinUnit)
-auctionValidatorScript params =
-  $$(PlutusTx.compile [||auctionUntypedValidator||])
-    `PlutusTx.unsafeApplyCode` PlutusTx.liftCode plcVersion110 params
+{- | The parameterised minting policy. The two compile-time parameters — token
+name and seed UTxO — are left free, so the off-chain side applies them with
+`applyParamsToScript` and every gift card gets a fresh policy id.
+-}
+giftCardMintingPolicyScript ::
+  CompiledCode (BuiltinData -> BuiltinData -> BuiltinData -> BuiltinUnit)
+giftCardMintingPolicyScript = $$(compile [||giftCardUntypedMintingPolicy||])
 
-PlutusTx.asData
-  [d|
-    data Bid' = Bid'
-      { bPkh' :: PubKeyHash
-      , -- \^ Bidder's wallet address.
-        bAmount' :: Lovelace
-      }
-      -- \^ Bid amount in Lovelace.
+=== on-chain/src/RedeemValidator.hs ===
+{-# LANGUAGE NoImplicitPrelude #-}
 
-      -- We can derive instances with the newtype strategy, and they
-      -- will be based on the instances for 'Data'
-      deriving newtype (Eq, Ord, PlutusTx.ToData, FromData, UnsafeFromData)
+module RedeemValidator where
 
-    -- don't do this for the datum, since it's just a newtype so
-    -- simply delegates to the underlying type
+import           PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..),
+                                           flattenValue)
+import           PlutusLedgerApi.V3       (ScriptContext (..), TxInfo (..),
+                                           mintValueBurned)
+import           PlutusTx
+import qualified PlutusTx.List            as List
+import           PlutusTx.Prelude
 
-    -- \| Redeemer is the input that changes the state of a smart contract.
-    -- In this case it is either a new bid, or a request to close the auction
-    -- and pay out the seller and the highest bidder.
-    data AuctionRedeemer' = NewBid' Bid | Payout'
-      deriving newtype (Eq, Ord, PlutusTx.ToData, FromData, UnsafeFromData)
-    |]
+{-# INLINEABLE redeemTypedValidator #-}
 
-=== on-chain/src/AuctionMintingPolicy.hs ===
-module AuctionMintingPolicy where
-
-import PlutusCore.Version (plcVersion110)
-import PlutusLedgerApi.V3 (PubKeyHash, ScriptContext (..), TxInfo (..), mintValueMinted)
-import PlutusLedgerApi.V1.Value (flattenValue)
-import PlutusLedgerApi.V3.Contexts (ownCurrencySymbol, txSignedBy)
-import PlutusTx
-import PlutusTx.Prelude qualified as PlutusTx
-
-type AuctionMintingParams = PubKeyHash
-type AuctionMintingRedeemer = ()
-
-{-# INLINEABLE auctionTypedMintingPolicy #-}
-auctionTypedMintingPolicy ::
-  AuctionMintingParams ->
+{- | Spending validator guarding the assets locked alongside a gift card. It
+only allows the UTxO to be spent when the matching gift-card token — identified
+by the parameterised policy id and token name — is burned in the same
+transaction. The datum and redeemer are unused: the burn is the authorisation.
+-}
+redeemTypedValidator ::
+  BuiltinByteString ->
+  BuiltinByteString ->
   ScriptContext ->
   Bool
-auctionTypedMintingPolicy pkh ctx@(ScriptContext txInfo _ _) =
-  txSignedBy txInfo pkh PlutusTx.&& mintedExactlyOneToken
+redeemTypedValidator tokenNameBytes policyIdBytes (ScriptContext txInfo _ _) =
+  case ownBurned of
+    [(tn, amt)] -> tn == TokenName tokenNameBytes && amt == 1
+    _           -> False
   where
-    -- Note: Redeemer is not needed for this minting policy, so we don't extract it
-    mintedExactlyOneToken = case flattenValue (mintValueMinted (txInfoMint txInfo)) of
-      [(currencySymbol, _tokenName, quantity)] ->
-        currencySymbol PlutusTx.== ownCurrencySymbol ctx PlutusTx.&& quantity PlutusTx.== 1
-      _ -> False
+    policy :: CurrencySymbol
+    policy = CurrencySymbol policyIdBytes
 
-auctionUntypedMintingPolicy ::
-  AuctionMintingParams ->
-  BuiltinData ->
-  PlutusTx.BuiltinUnit
-auctionUntypedMintingPolicy pkh ctx =
-  PlutusTx.check
-    ( auctionTypedMintingPolicy
-        pkh
-        (PlutusTx.unsafeFromBuiltinData ctx)
+    -- Tokens of the gift-card policy burned in this transaction, as
+    -- (token name, positive quantity) pairs.
+    ownBurned :: [(TokenName, Integer)]
+    ownBurned =
+      List.map (\(_, tn, amt) -> (tn, amt))
+        ( List.filter
+            (\(cs, _, _) -> cs == policy)
+            (flattenValue (mintValueBurned (txInfoMint txInfo)))
+        )
+
+{-# INLINEABLE redeemUntypedValidator #-}
+redeemUntypedValidator ::
+  BuiltinData -> BuiltinData -> BuiltinData -> BuiltinUnit
+redeemUntypedValidator tokenName policyId ctx =
+  check
+    ( redeemTypedValidator
+        (unsafeFromBuiltinData tokenName)
+        (unsafeFromBuiltinData policyId)
+        (unsafeFromBuiltinData ctx)
     )
 
-auctionMintingPolicyScript ::
-  AuctionMintingParams ->
-  CompiledCode (BuiltinData -> PlutusTx.BuiltinUnit)
-auctionMintingPolicyScript pkh =
-  $$(PlutusTx.compile [||auctionUntypedMintingPolicy||])
-    `PlutusTx.unsafeApplyCode` PlutusTx.liftCode plcVersion110 pkh
-
-=== on-chain/src/Demo.hs ===
--- | Placeholder parameters used to instantiate the example validators for
--- blueprint generation and the smoke test. Replace these with your own values
--- (seller key hash, auctioned asset, minimum bid, deadline) for a real auction.
-module Demo (demoSellerPkh, demoAuctionParams) where
-
-import AuctionValidator (AuctionParams (..))
-import PlutusLedgerApi.V1.Crypto qualified as Crypto
-import PlutusLedgerApi.V1.Time qualified as Time
-import PlutusLedgerApi.V1.Value qualified as Value
-import PlutusTx.Builtins.HasOpaque (stringToBuiltinByteStringHex)
-
--- | Hex-encoded public key hash of the seller. Replace with a real one.
-demoSellerPkh :: Crypto.PubKeyHash
-demoSellerPkh =
-  Crypto.PubKeyHash
-    ( stringToBuiltinByteStringHex
-        "0000000000000000000000000000000000000000\
-        \0000000000000000000000000000000000000000"
-    )
-
--- | Fully-applied auction parameters for the example.
-demoAuctionParams :: AuctionParams
-demoAuctionParams =
-  AuctionParams
-    { apSeller = demoSellerPkh
-    , apCurrencySymbol =
-        -- Replace with your desired currency symbol (minting policy hash):
-        Value.CurrencySymbol
-          ( stringToBuiltinByteStringHex
-              "00000000000000000000000000000000000000000000000000000000"
-          )
-    , apTokenName =
-        -- Replace with your desired token name:
-        Value.tokenName "MY_TOKEN"
-    , apMinBid =
-        -- Minimal bid in lovelace:
-        100
-    , apEndTime =
-        -- Replace with your desired end time in milliseconds:
-        Time.fromMilliSeconds 1_725_227_091_000
-    }
+{- | The parameterised redeem validator. Its two compile-time parameters — token
+name and gift-card policy id — are left free so the off-chain side applies them.
+-}
+redeemValidatorScript ::
+  CompiledCode (BuiltinData -> BuiltinData -> BuiltinData -> BuiltinUnit)
+redeemValidatorScript = $$(compile [||redeemUntypedValidator||])
 
 === on-chain/app/GenBlueprint.hs ===
 module Main where
 
-import AuctionValidator (AuctionParams, AuctionDatum, AuctionRedeemer, auctionValidatorScript)
-import AuctionMintingPolicy (AuctionMintingParams, auctionMintingPolicyScript)
-import Demo (demoAuctionParams, demoSellerPkh)
-import Data.ByteString.Short qualified as Short
-import Data.Set qualified as Set
-import PlutusLedgerApi.Common (serialiseCompiledCode)
-import PlutusTx.Blueprint
-import System.Environment (getArgs)
+import qualified Data.ByteString.Short  as Short
+import qualified Data.Set               as Set
+import           GiftCardMintingPolicy  (GiftCardAction,
+                                         giftCardMintingPolicyScript)
+import           PlutusLedgerApi.Common (serialiseCompiledCode)
+import           PlutusLedgerApi.V3     (TxId, TxOutRef)
+import           PlutusTx.Blueprint
+import           PlutusTx.Builtins      (BuiltinByteString, BuiltinData)
+import           RedeemValidator        (redeemValidatorScript)
+import           System.Environment     (getArgs)
 
--- | The combined CIP-57 blueprint: one contract exposing both the auction
--- spending validator and the minting policy for the token being auctioned.
+-- | The combined CIP-57 blueprint: one contract exposing the gift-card minting
+-- policy and its redeem spending validator. Both are emitted *parameterised*
+-- (their compile-time arguments are left free), so any off-chain component can
+-- apply a token name and seed UTxO / policy id and get working scripts.
 contractBlueprint :: ContractBlueprint
 contractBlueprint =
   MkContractBlueprint
-    { contractId = Just "auction"
+    { contractId = Just "gift-card"
     , contractPreamble = preamble
-    , contractValidators = Set.fromList [auctionValidator, mintingPolicyValidator]
+    , contractValidators = Set.fromList [giftCardValidator, redeemValidator]
     , contractDefinitions =
-        deriveDefinitions @[AuctionParams, AuctionDatum, AuctionRedeemer, AuctionMintingParams, ()]
+        deriveDefinitions @[GiftCardAction, TxOutRef, TxId, BuiltinByteString, Integer, BuiltinData]
     }
 
 preamble :: Preamble
 preamble =
   MkPreamble
-    { preambleTitle = "snap-project auction"
+    { preambleTitle = "snap-project gift card"
     , preambleDescription =
-        Just "Blueprint for the auction validator and its minting policy"
+        Just "One-shot gift-card minting policy and its redeem spending validator"
     , preambleVersion = "1.0.0"
     , preamblePlutusVersion = PlutusV3
     , preambleLicense = Just "Apache-2.0"
     }
 
-auctionValidator :: ValidatorBlueprint referencedTypes
-auctionValidator =
+-- | The minting policy. Its title ends in @gift_card.mint@ so off-chain tooling
+-- (e.g. the MeshJS bindings) can locate it in the blueprint by convention.
+giftCardValidator :: ValidatorBlueprint referencedTypes
+giftCardValidator =
   MkValidatorBlueprint
-    { validatorTitle = "Auction Validator"
+    { validatorTitle = "giftcard.gift_card.mint"
     , validatorDescription =
-        Just "Plutus script validating auction transactions"
+        Just "One-shot minting policy: mints a unique gift-card token; burns it on redeem"
     , validatorParameters =
         [ MkParameterBlueprint
-            { parameterTitle = Just "Parameters"
-            , parameterDescription = Just "Compile-time validator parameters"
-            , parameterPurpose = Set.singleton Spend
-            , parameterSchema = definitionRef @AuctionParams
+            { parameterTitle = Just "Token name"
+            , parameterDescription = Just "Name of the gift-card token"
+            , parameterPurpose = Set.singleton Mint
+            , parameterSchema = definitionRef @BuiltinByteString
+            }
+        , MkParameterBlueprint
+            { parameterTitle = Just "Seed UTxO"
+            , parameterDescription = Just "Output reference spent when minting, guaranteeing uniqueness"
+            , parameterPurpose = Set.singleton Mint
+            , parameterSchema = definitionRef @TxOutRef
             }
         ]
     , validatorRedeemer =
         MkArgumentBlueprint
-          { argumentTitle = Just "Redeemer"
-          , argumentDescription = Just "Either a new bid or a request to pay out"
-          , argumentPurpose = Set.fromList [Spend]
-          , argumentSchema = definitionRef @AuctionRedeemer
+          { argumentTitle = Just "Action"
+          , argumentDescription = Just "Mint the gift-card token or burn it"
+          , argumentPurpose = Set.fromList [Mint]
+          , argumentSchema = definitionRef @GiftCardAction
           }
     , validatorDatum = Nothing
     , validatorCompiled = do
-        let code = Short.fromShort (serialiseCompiledCode (auctionValidatorScript demoAuctionParams))
+        let code = Short.fromShort (serialiseCompiledCode giftCardMintingPolicyScript)
         Just (compiledValidator PlutusV3 code)
     }
 
-mintingPolicyValidator :: ValidatorBlueprint referencedTypes
-mintingPolicyValidator =
+-- | The redeem spending validator. Its title ends in @redeem.spend@.
+redeemValidator :: ValidatorBlueprint referencedTypes
+redeemValidator =
   MkValidatorBlueprint
-    { validatorTitle = "Auction Minting Policy"
+    { validatorTitle = "giftcard.redeem.spend"
     , validatorDescription =
-        Just "Mints the single token being auctioned"
+        Just "Guards the locked gift; releases the assets when the gift-card token is burned"
     , validatorParameters =
         [ MkParameterBlueprint
-            { parameterTitle = Just "Minting Policy Parameters"
-            , parameterDescription = Just "Compile-time validator parameters"
-            , parameterPurpose = Set.singleton Mint
-            , parameterSchema = definitionRef @AuctionMintingParams
+            { parameterTitle = Just "Token name"
+            , parameterDescription = Just "Name of the gift-card token"
+            , parameterPurpose = Set.singleton Spend
+            , parameterSchema = definitionRef @BuiltinByteString
+            }
+        , MkParameterBlueprint
+            { parameterTitle = Just "Policy id"
+            , parameterDescription = Just "Currency symbol of the gift-card minting policy"
+            , parameterPurpose = Set.singleton Spend
+            , parameterSchema = definitionRef @BuiltinByteString
             }
         ]
     , validatorRedeemer =
         MkArgumentBlueprint
           { argumentTitle = Just "Redeemer"
-          , argumentDescription = Just "The minting policy does not use a redeemer, hence ()"
-          , argumentPurpose = Set.fromList [Mint]
-          , argumentSchema = definitionRef @()
+          , argumentDescription = Just "Unused; burning the token in the same transaction authorises the spend"
+          , argumentPurpose = Set.fromList [Spend]
+          , argumentSchema = definitionRef @BuiltinData
           }
     , validatorDatum = Nothing
     , validatorCompiled = do
-        let code = Short.fromShort (serialiseCompiledCode (auctionMintingPolicyScript demoSellerPkh))
+        let code = Short.fromShort (serialiseCompiledCode redeemValidatorScript)
         Just (compiledValidator PlutusV3 code)
     }
 
@@ -753,12 +581,11 @@ main =
 === on-chain/test/Spec.hs ===
 module Main where
 
-import AuctionValidator (auctionValidatorScript)
-import AuctionMintingPolicy (auctionMintingPolicyScript)
-import Demo (demoAuctionParams, demoSellerPkh)
 import Control.Monad (when)
 import Data.ByteString.Short qualified as Short
+import GiftCardMintingPolicy (giftCardMintingPolicyScript)
 import PlutusLedgerApi.Common (serialiseCompiledCode)
+import RedeemValidator (redeemValidatorScript)
 import System.Exit (exitFailure)
 
 -- | A minimal smoke test. Serialising the compiled code forces the Plinth
@@ -766,11 +593,11 @@ import System.Exit (exitFailure)
 -- error surfaces here; we then assert the resulting scripts are non-empty.
 main :: IO ()
 main = do
-  let auctionBytes = Short.length (serialiseCompiledCode (auctionValidatorScript demoAuctionParams))
-      mintBytes = Short.length (serialiseCompiledCode (auctionMintingPolicyScript demoSellerPkh))
-  putStrLn ("auction validator: " <> show auctionBytes <> " bytes of Plutus Core")
-  putStrLn ("minting policy:    " <> show mintBytes <> " bytes of Plutus Core")
-  when (auctionBytes == 0 || mintBytes == 0) $ do
+  let mintBytes = Short.length (serialiseCompiledCode giftCardMintingPolicyScript)
+      redeemBytes = Short.length (serialiseCompiledCode redeemValidatorScript)
+  putStrLn ("gift-card minting policy: " <> show mintBytes <> " bytes of Plutus Core")
+  putStrLn ("redeem validator:         " <> show redeemBytes <> " bytes of Plutus Core")
+  when (mintBytes == 0 || redeemBytes == 0) $ do
     putStrLn "FAIL: a validator compiled to an empty script"
     exitFailure
   putStrLn "ok: both validators compile to Plutus Core and serialise"

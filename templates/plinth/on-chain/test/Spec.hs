@@ -1,11 +1,10 @@
 module Main where
 
-import AuctionValidator (auctionValidatorScript)
-import AuctionMintingPolicy (auctionMintingPolicyScript)
-import Demo (demoAuctionParams, demoSellerPkh)
 import Control.Monad (when)
 import Data.ByteString.Short qualified as Short
+import GiftCardMintingPolicy (giftCardMintingPolicyScript)
 import PlutusLedgerApi.Common (serialiseCompiledCode)
+import RedeemValidator (redeemValidatorScript)
 import System.Exit (exitFailure)
 
 -- | A minimal smoke test. Serialising the compiled code forces the Plinth
@@ -13,11 +12,11 @@ import System.Exit (exitFailure)
 -- error surfaces here; we then assert the resulting scripts are non-empty.
 main :: IO ()
 main = do
-  let auctionBytes = Short.length (serialiseCompiledCode (auctionValidatorScript demoAuctionParams))
-      mintBytes = Short.length (serialiseCompiledCode (auctionMintingPolicyScript demoSellerPkh))
-  putStrLn ("auction validator: " <> show auctionBytes <> " bytes of Plutus Core")
-  putStrLn ("minting policy:    " <> show mintBytes <> " bytes of Plutus Core")
-  when (auctionBytes == 0 || mintBytes == 0) $ do
+  let mintBytes = Short.length (serialiseCompiledCode giftCardMintingPolicyScript)
+      redeemBytes = Short.length (serialiseCompiledCode redeemValidatorScript)
+  putStrLn ("gift-card minting policy: " <> show mintBytes <> " bytes of Plutus Core")
+  putStrLn ("redeem validator:         " <> show redeemBytes <> " bytes of Plutus Core")
+  when (mintBytes == 0 || redeemBytes == 0) $ do
     putStrLn "FAIL: a validator compiled to an empty script"
     exitFailure
   putStrLn "ok: both validators compile to Plutus Core and serialise"
