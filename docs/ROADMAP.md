@@ -30,12 +30,12 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 - [ ] `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/TECH_SPEC.md`, `docs/ADDING_A_TOOL.md`.
 - [ ] **Plugin/project integration strategy** = the interface contract (§4 TECH_SPEC) + the data-driven registry + the deps/installer model. This *is* the "how a tool plugs in" story the milestone asks for; make sure it reads as such.
 
-**The tool: all five roles present, four building green, formal-methods preview:**
+**The tool: all five roles present, four building green, formal-methods experimental:**
 - [ ] **On-chain:** Aiken; make the template genuinely `build`+`test` green (blueprint at canonical path).
 - [ ] **Off-chain:** MeshJS + Tx3; both generate and build.
 - [x] **Infrastructure:** filled via `cardano-up` — **Kupo, Ogmios, Dolos, Tx Submit API, Cardano Node, Cardano Node API, and Dingo** ship as selectable providers that aggregate into a single `infra/` component (one cardano-up context per project). Adding further providers is pure data (a registry TOML, no template). Uses `cardano-up`'s released `--context` flag (blinklabs-io#294; see `docs/proposals/infra-via-cardano-up.md`). Yaci DevKit remains in the **devnet** role (it is a dev/test kit, never deployed).
 - [ ] **Devnet:** Yaci DevKit (local devnet — its `dev` starts a Blockfrost-compatible devnet and writes the standard `.env` connection vars, so off-chain connects to it automatically; `test` runs an integration smoke test).
-- [ ] **Formal-methods:** preview; visible in the registry/UI as "coming soon"; the Blaster placeholder is not a build-green deliverable yet (made real at DX.05).
+- [x] **Formal-methods:** experimental; visible in the registry/UI as "experimental"; Blaster is a WIP upstream tool *and* its integration isn't build-green yet (made real at DX.05). Registry `experimental` flag (per-tool, §3.2.1 — covers unstable-upstream and/or not-build-green) surfaced across `list`/`--help`, interactive, one-shot, and the web builder, and **gated** behind `--allow-experimental` / an interactive confirm so it can't be scaffolded unknowingly; `list`/component JSON carry it for agents.
 
 **Feature surface:**
 - [ ] Interactive CLI and one-shot CLI (polish; deterministic output).
@@ -47,7 +47,7 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 ### Success criteria
 
 - Repo presents defined scope, specs, architecture, and the integration strategy (above).
-- `cardano-init` generates projects for **all five roles** (four build-green, formal-methods preview).
+- `cardano-init` generates projects for **all five roles** (four build-green, formal-methods experimental).
 - The feature surface above is demoable end-to-end and stable enough to show key players.
 
 ### Cut-line (if behind in August)
@@ -69,7 +69,7 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 **Stack: widen each role + finish build-green:**
 - [ ] **A couple more tools per role** (exact picks chosen from community feedback).
 - [ ] Finish **SM-1 (build+test green)** for everything shipped, including any DX.02 relaxations.
-- [ ] **Formal-methods made real** (build-green), promoted from preview.
+- [ ] **Formal-methods made real** (build-green), promoted from experimental.
 
 **Website + docs (publicly accessible):**
 - [ ] **Docs site:** Comprehensive documentation about usage both for end users. It could be hosted on a dedicated website, or part of Cardano's Developer Portal.
@@ -123,7 +123,7 @@ Direction (unscheduled; shaped by RC feedback):
 - **The doctor graph is new surface.** `registry/deps.toml` + the installer table + the
   recursive resolver + `cardano-init doctor` is net-new for DX.02; the auto-install command
   (DX.05) builds on it.
-- **Formal-methods tooling is thin**: hence preview at DX.02; the DX.05 "make it real"
+- **Formal-methods tooling is thin**: hence experimental at DX.02; the DX.05 "make it real"
   item carries the most uncertainty and may stay experimental.
 - **Spec churn after DX.02 is expected and healthy.** The key-player review may change scope;
   Phase 1 picks (the extra per-role tools, formal-methods approach) are deliberately left to
