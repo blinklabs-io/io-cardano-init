@@ -1,8 +1,8 @@
 # Protocol component (Scalus, fullstack: on-chain + off-chain)
 # Part of {{ project_name }}
 #
-# One unified Scala 3 / sbt build for BOTH the on-chain minting policy and the
-# off-chain transaction building. The two halves share types directly (no
+# One unified Scala 3 / sbt build for BOTH the on-chain gift-card validators and
+# the off-chain transaction building. The two halves share types directly (no
 # blueprint round-trip between them) — that shared build is the whole point of
 # the fullstack layout. `build` still writes ../{{ blueprint_path }} so the
 # other components (devnet, formal-methods, infra) can consume it.
@@ -20,7 +20,7 @@ build:
 test:
     sbt test
 
-# Run the minting REST API against whatever ../.env points at (local devnet or
+# Run the gift-card REST API against whatever ../.env points at (local devnet or
 # Blockfrost). Swagger UI at http://localhost:8088/docs. Long-running: Ctrl-C.
 dev:
     sbt "runMain app.start"

@@ -131,8 +131,8 @@ CARDANO_NODE_API_URL=
 # Protocol component (Scalus, fullstack: on-chain + off-chain)
 # Part of snap-project
 #
-# One unified Scala 3 / sbt build for BOTH the on-chain minting policy and the
-# off-chain transaction building. The two halves share types directly (no
+# One unified Scala 3 / sbt build for BOTH the on-chain gift-card validators and
+# the off-chain transaction building. The two halves share types directly (no
 # blueprint round-trip between them) — that shared build is the whole point of
 # the fullstack layout. `build` still writes ../blueprint/plutus.json so the
 # other components (devnet, formal-methods, infra) can consume it.
@@ -150,7 +150,7 @@ build:
 test:
     sbt test
 
-# Run the minting REST API against whatever ../.env points at (local devnet or
+# Run the gift-card REST API against whatever ../.env points at (local devnet or
 # Blockfrost). Swagger UI at http://localhost:8088/docs. Long-running: Ctrl-C.
 dev:
     sbt "runMain app.start"
@@ -248,187 +248,223 @@ addSbtPlugin("org.scalus" % "scalus-sbt-plugin" % "0.18.2")
 === protocol/project/build.properties ===
 sbt.version=1.12.8
 
-=== protocol/src/main/scala/app/MintingPolicy.scala ===
+=== protocol/src/main/scala/app/GiftCard.scala ===
 package app
 
 import scalus.*
 import scalus.compiler.*
 import scalus.cardano.onchain.plutus.prelude.List.{Cons, Nil}
 import scalus.cardano.onchain.plutus.prelude.{*, given}
-import scalus.cardano.onchain.plutus.v1.{PolicyId, PubKeyHash, TokenName}
-import scalus.cardano.onchain.plutus.v3.{DataParameterizedValidator, TxInfo}
+import scalus.cardano.onchain.plutus.v1.{PolicyId, TokenName}
+import scalus.cardano.onchain.plutus.v3.{ScriptContext, ScriptInfo, TxInfo, TxOutRef}
 import scalus.uplc.builtin.{Data, FromData, ToData}
 
 import scala.language.implicitConversions
 
-/** Configuration parameters for the minting policy.
-  *
-  * These values are "baked into" the script when it's deployed, making each deployment unique. The
-  * script hash (policy ID) will change if these parameters change.
+/** What the holder of a gift-card token is doing: creating the card (mint the token) or redeeming it
+  * (burn the token). Encoded as `Constr 0 []` / `Constr 1 []`, matching what off-chain tooling —
+  * including the MeshJS bindings and the Aiken/Plinth variants — supplies as the mint redeemer.
   */
-case class MintingConfig(
-    adminPubKeyHash: PubKeyHash, // Only this key can authorize minting/burning
-    tokenName: TokenName // The only token name this policy allows
-) derives FromData,
-      ToData
+enum Action derives FromData, ToData:
+    case Mint
+    case Burn
 
-/** Minting Policy Validator
+// The seed UTxO is a plain `TxOutRef`. Scalus encodes it as `Constr 0 [transaction_id, index]` —
+// the transaction id is a bare byte string — which is byte-for-byte the shape Aiken's
+// `OutputReference` and MeshJS's `outputReference` produce. So any off-chain tool parameterises this
+// policy the same way it would an Aiken or Plinth gift card, with no bespoke seed type needed.
+
+/** Gift-card one-shot minting policy.
   *
-  * This is the on-chain smart contract that controls token minting and burning. The @Compile
-  * annotation generates Scalus Intermediate Representation (SIR) which is then compiled to Untyped
-  * Plutus Core (UPLC) for execution on Cardano.
-  *
-  * Key concepts:
-  *   - Minting policies validate whether tokens can be minted or burned
-  *   - The policy ID (script hash) becomes the currency symbol for minted tokens
-  *   - DataParameterizedValidator allows passing configuration as script parameters
+  * Creating a gift card mints exactly one token of `tokenName` under this policy; redeeming it burns
+  * exactly one. Parameterised by two *separate* curried arguments — the token name and the seed UTxO
+  * — so the compiled code is ABI-identical to the Aiken/Plinth gift card and can be driven by the
+  * same off-chain bindings.
   */
 @Compile
-object MintingPolicy extends DataParameterizedValidator {
+object GiftCard {
 
-    /** Core validation logic for minting/burning tokens.
-      *
-      * This function runs ON-CHAIN for every mint/burn transaction. It must succeed (return Unit)
-      * for the transaction to be valid. Any failure (via `fail` or `require`) will reject the
-      * transaction.
-      *
-      * Validation rules:
-      *   1. Only the configured token name can be minted/burned 2. Only one token type per
-      *      transaction (prevents accidental multi-minting) 3. Transaction must be signed by the
-      *      admin key
-      *
-      * @param adminPubKeyHash
-      *   the public key hash of the admin who can authorize minting/burning
-      * @param tokenName
-      *   the only token name this policy allows to mint or burn
-      * @param ownPolicyId
-      *   this script's own policy ID (currency symbol for minted tokens)
-      * @param tx
-      *   transaction information provided by the Cardano ledger
-      */
-    def mintingPolicy(
-        adminPubKeyHash: PubKeyHash,
+    /** Core validation logic, runnable as a plain Scala function (debuggable) and on-chain. */
+    def giftCardPolicy(
         tokenName: TokenName,
+        seed: TxOutRef,
+        action: Action,
         ownPolicyId: PolicyId,
         tx: TxInfo
     ): Unit = {
-        // tx.mint contains all tokens being minted/burned in this transaction
-        // We look up our own policy ID to find tokens we're responsible for validating
-        val mintedTokens = tx.mint.toSortedMap.getOrFail(ownPolicyId, "Tokens not found")
+        val ownTokens = tx.mint.toSortedMap.getOrFail(ownPolicyId, "No tokens for this policy")
 
-        // Pattern match to ensure exactly one token type with the correct name
-        // Note: Scalus uses its own List type for on-chain code, not scala.List
-        mintedTokens.toList match
-            case Cons((tokName, _), Nil) =>
-                require(tokName == tokenName, "Token name not found")
-            case Cons(_, _) =>
-                fail("Multiple tokens found")
+        // Exactly one token entry, of the parameterised name, is minted or burned. Requiring a
+        // single entry stops a caller sneaking a second token name under the same policy.
+        ownTokens.toList match
+            case Cons((tokName, amount), Nil) =>
+                require(tokName == tokenName, "Wrong token name")
+                action match
+                    case Action.Mint =>
+                        require(amount == BigInt(1), "Mint must create exactly one token")
+                        // One-shot: the parameterised seed UTxO must be among the inputs.
+                        require(
+                          tx.inputs.exists(_.outRef === seed),
+                          "Seed UTxO not spent"
+                        )
+                    case Action.Burn =>
+                        require(amount == BigInt(-1), "Burn must destroy exactly one token")
             case _ =>
-                // Cardano ledger rules guarantee that minting always has tokens
-                impossible()
-
-        // Verify admin authorization - tx.signatories contains all keys that signed
-        require(tx.signatories.contains(adminPubKeyHash), "Not signed by admin")
+                fail("Exactly one gift-card token must be minted or burned")
     }
 
-    /** Entry point called by the Cardano ledger for minting policy validation.
+    /** On-chain entry point: `\tokenName -> \seed -> \scriptContext -> Unit` (Plutus V3).
       *
-      * DataParameterizedValidator provides this structure where the `param` contains configuration
-      * data embedded in the script at deployment time.
-      *
-      * @param param
-      *   configuration data (MintingConfig) embedded in the script
-      * @param redeemer
-      *   data provided by the transaction (unused here, but could carry intent)
-      * @param policyId
-      *   this script's own policy ID (hash of the script)
-      * @param tx
-      *   full transaction information for validation
+      * The two leading parameters are left free so the off-chain side applies them with
+      * `applyParamsToScript`; the ledger then applies the final script context.
       */
-    override inline def mint(
-        param: Data,
-        redeemer: Data,
+    def mint(tokenName: Data)(seed: Data)(ctx: Data): Unit = {
+        val scriptContext = ctx.to[ScriptContext]
+        val ownPolicyId = scriptContext.scriptInfo match
+            case ScriptInfo.MintingScript(currencySymbol) => currencySymbol
+            case _                                         => fail("Not a minting script")
+        giftCardPolicy(
+          tokenName.to[TokenName],
+          seed.to[TxOutRef],
+          scriptContext.redeemer.to[Action],
+          ownPolicyId,
+          scriptContext.txInfo
+        )
+    }
+}
+
+/** Redeem spending validator.
+  *
+  * Guards the assets locked alongside a gift card. It only allows its UTxO to be spent when the
+  * matching gift-card token — identified by the parameterised policy ID and token name — is burned
+  * in the same transaction. The datum and redeemer are unused: the burn is the authorisation.
+  *
+  * Parameterised by two separate curried arguments (token name, then policy ID), ABI-identical to
+  * the Aiken/Plinth redeem validator.
+  */
+@Compile
+object Redeem {
+
+    def redeemValidator(
+        tokenName: TokenName,
         policyId: PolicyId,
         tx: TxInfo
     ): Unit = {
-        val mintingConfig = param.to[MintingConfig]
-        mintingPolicy(mintingConfig.adminPubKeyHash, mintingConfig.tokenName, policyId, tx)
+        val burnedTokens = tx.mint.toSortedMap.getOrFail(policyId, "Gift-card token not burned")
+        burnedTokens.toList match
+            case Cons((tokName, amount), Nil) =>
+                require(tokName == tokenName, "Wrong token name")
+                require(amount == BigInt(-1), "Gift-card token must be burned to redeem")
+            case _ =>
+                fail("Exactly one gift-card token must be burned")
     }
 
+    /** On-chain entry point: `\tokenName -> \policyId -> \scriptContext -> Unit` (Plutus V3). */
+    def spend(tokenName: Data)(policyId: Data)(ctx: Data): Unit = {
+        val scriptContext = ctx.to[ScriptContext]
+        redeemValidator(tokenName.to[TokenName], policyId.to[PolicyId], scriptContext.txInfo)
+    }
 }
 
-=== protocol/src/main/scala/app/MintingPolicyContract.scala ===
+=== protocol/src/main/scala/app/GiftCardContract.scala ===
 package app
 
 import scalus.cardano.blueprint.{Blueprint, Contract, HasTypeDescription, Preamble, Validator}
-import scalus.cardano.onchain.plutus.v1.{PubKeyHash, TokenName}
+import scalus.cardano.onchain.plutus.v1.{PolicyId, TokenName}
+import scalus.cardano.onchain.plutus.v3.TxOutRef
 import scalus.compiler.Options
-import scalus.uplc.builtin.Data
+import scalus.uplc.builtin.{ByteString, Data}
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.{PlutusV3, Program}
 import scalus.utils.Hex.toHex
 
-/** Off-chain code for compiling, instantiating, and generating blueprints for the minting policy.
+/** Code for compiling, instantiating, and generating the CIP-57 blueprint for the two
+  * gift-card validators.
   *
   * Extends [[Contract]] so the Scalus compiler plugin registers it and the `blueprint` sbt task
-  * (from scalus-sbt-plugin) generates `META-INF/scalus/blueprints/MintingPolicyContract.json`.
+  * (from scalus-sbt-plugin) generates `META-INF/scalus/blueprints/GiftCardContract.json`.
   * `app.genBlueprint` (see Main.scala) writes the same CIP-57 JSON to the canonical
   * `../blueprint/plutus.json` so the other components can consume it.
+  *
+  * The blueprint exposes both validators under the conventional titles `giftcard.gift_card.mint`
+  * and `giftcard.redeem.spend`, so off-chain tooling that locates validators by their
+  * `<validator>.<purpose>` suffix (e.g. the MeshJS bindings) can find them.
   */
-object MintingPolicyContract extends Contract {
+object GiftCardContract extends Contract {
 
     private given Options = Options.release
 
-    /** Compiled Minting Policy */
-    val compiled: PlutusV3[Data => Data => Unit] =
-        PlutusV3.compile(MintingPolicy.validate)
+    /** Compiled gift-card minting policy: `\tokenName -> \seed -> \scriptContext -> Unit`. */
+    val giftCardCompiled: PlutusV3[Data => Data => Data => Unit] =
+        PlutusV3.compile(GiftCard.mint)
 
-    /** Optimized UPLC program with error traces for debugging */
-    val program: Program = compiled.withErrorTraces.program
+    /** Compiled redeem spending validator: `\tokenName -> \policyId -> \scriptContext -> Unit`. */
+    val redeemCompiled: PlutusV3[Data => Data => Data => Unit] =
+        PlutusV3.compile(Redeem.spend)
 
-    /** CIP-57 blueprint describing the minting policy schema */
+    /** Optimized UPLC program for the minting policy, with error traces for debugging. */
+    val giftCardProgram: Program = giftCardCompiled.withErrorTraces.program
+
+    /** Optimized UPLC program for the redeem validator, with error traces for debugging. */
+    val redeemProgram: Program = redeemCompiled.withErrorTraces.program
+
+    /** CIP-57 blueprint describing both gift-card validators. */
     lazy val blueprint: Blueprint = {
-        val title = "Minting Policy"
-        val description =
-            "Admin-controlled minting policy for a single token name"
-        val param = summon[HasTypeDescription[MintingConfig]].typeDescription
+        val tokenNameParam = summon[HasTypeDescription[ByteString]].typeDescription
+        val seedParam = summon[HasTypeDescription[TxOutRef]].typeDescription
+        val policyIdParam = summon[HasTypeDescription[ByteString]].typeDescription
+        val actionSchema = summon[HasTypeDescription[Action]].typeDescription
+        val unitSchema = summon[HasTypeDescription[Unit]].typeDescription
         Blueprint(
           preamble = Preamble(
-            title,
-            description,
+            "Gift Card",
+            "One-shot gift-card minting policy and its redeem spending validator",
             "1.0.0",
-            plutusVersion = compiled.language,
+            plutusVersion = giftCardCompiled.language,
             license = Some("Apache-2.0")
           ),
           validators = Seq(
             Validator(
-              title = title,
-              description = Some(description),
-              redeemer = Some(summon[HasTypeDescription[Unit]].typeDescription),
+              title = "giftcard.gift_card.mint",
+              description = Some(
+                "One-shot minting policy: mints a unique gift-card token; burns it on redeem"
+              ),
+              redeemer = Some(actionSchema),
               datum = None,
-              parameters = Some(List(param)),
-              compiledCode = Some(compiled.program.cborEncoded.toHex),
-              hash = Some(compiled.script.scriptHash.toHex)
+              parameters = Some(List(tokenNameParam, seedParam)),
+              compiledCode = Some(giftCardCompiled.program.cborEncoded.toHex),
+              hash = Some(giftCardCompiled.script.scriptHash.toHex)
+            ),
+            Validator(
+              title = "giftcard.redeem.spend",
+              description = Some(
+                "Guards the locked gift; releases the assets when the gift-card token is burned"
+              ),
+              redeemer = Some(unitSchema),
+              datum = None,
+              parameters = Some(List(tokenNameParam, policyIdParam)),
+              compiledCode = Some(redeemCompiled.program.cborEncoded.toHex),
+              hash = Some(redeemCompiled.script.scriptHash.toHex)
             )
           )
         )
     }
 
-    /** Creates a parameterized minting policy script.
-      *
-      * @param adminPubKeyHash
-      *   public key hash of the admin
-      * @param tokenName
-      *   token name to allow
-      * @return
-      *   a configured minting policy script
+    /** Parameterise the one-shot minting policy with a token name and seed UTxO — applied as two
+      * separate arguments, exactly as `applyParamsToScript` would. Every distinct seed yields a
+      * fresh policy ID.
       */
-    def makeMintingPolicyScript(
-        adminPubKeyHash: PubKeyHash,
-        tokenName: TokenName
-    ): PlutusV3[Data => Unit] = {
-        val config = MintingConfig(adminPubKeyHash = adminPubKeyHash, tokenName = tokenName)
-        compiled(config.toData)
+    def makeGiftCardScript(tokenName: TokenName, seed: TxOutRef): PlutusV3[Data => Unit] = {
+        val withTokenName = giftCardCompiled(tokenName.toData)
+        withTokenName(seed.toData)
+    }
+
+    /** Parameterise the redeem spending validator with the token name and the gift-card policy ID,
+      * applied as two separate arguments.
+      */
+    def makeRedeemScript(tokenName: TokenName, policyId: PolicyId): PlutusV3[Data => Unit] = {
+        val withTokenName = redeemCompiled(tokenName.toData)
+        withTokenName(policyId.toData)
     }
 }
 
@@ -436,7 +472,9 @@ object MintingPolicyContract extends Contract {
 package app
 
 import scalus.uplc.builtin.Data
-import scalus.cardano.ledger.{AssetName, Transaction, Value}
+import scalus.uplc.builtin.Data.toData
+import scalus.cardano.ledger.{AssetName, Coin, Transaction, Utxo, Value}
+import scalus.cardano.onchain.plutus.v3.{TxId, TxOutRef}
 import scalus.cardano.txbuilder.TxBuilder
 import scalus.utils.*
 import scalus.utils.await
@@ -445,118 +483,144 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.*
 import scala.util.Try
 
-/** Transaction building logic for minting and burning tokens.
+/** A gift card the wallet just created — everything needed to locate and later redeem it.
   *
-  * This class demonstrates how to construct Cardano transactions that interact with Plutus scripts
-  * using the Scalus TxBuilder API.
+  * The token name (fixed for this app) plus `seed` (the one-shot UTxO) fully determine the gift
+  * card's policy ID and redeem address, so `seed` is all a redeemer needs.
+  */
+case class CreatedGiftCard(
+    txHash: String,
+    seed: TxOutRef,
+    redeemAddress: String,
+    unit: String
+)
+
+/** Transaction building for the gift-card flow, using Scalus's [[TxBuilder]] (UTxO selection,
+  * collateral, and balancing are automatic).
   *
-  * Key concepts:
-  *   - Minting: Creating new tokens under a policy ID
-  *   - Burning: Destroying tokens (negative mint amount)
-  *
-  * UTxO selection, collateral, and balancing are handled automatically by TxBuilder.complete().
+  * A gift card is created in one transaction and redeemed in another:
+  *   - **create** mints a unique one-shot token and locks it, together with the gift, at the redeem
+  *     script address (with the token name + seed recorded as an inline datum).
+  *   - **redeem** spends that locked UTxO and burns the token in the same transaction, releasing the
+  *     gift to the wallet.
   *
   * @param ctx
-  *   application context containing provider, signer, and script configuration
+  *   application context: provider, signer, wallet address, and the gift-card token name.
   */
 class Transactions(ctx: AppCtx) {
 
-    /** Builds a transaction that mints new tokens.
-      *
-      * @param amount
-      *   number of tokens to mint (positive)
-      * @return
-      *   either an error message or the signed transaction
-      */
-    def makeMintingTx(amount: Long): Either[String, Transaction] = {
-        Try {
-            val assetName = AssetName(ctx.tokenNameByteString)
-            val assets = Map(assetName -> amount)
-            val mintedValue = Value.asset(ctx.mintingScript.script.scriptHash, assetName, amount)
+    private val tokenName = ctx.tokenNameByteString
+    private val assetName = AssetName(tokenName)
 
-            TxBuilder(ctx.cardanoInfo)
-                .mint(
-                  compiled = ctx.mintingScript,
-                  assets = assets,
-                  redeemer = Data.unit
+    /** Create a gift card holding `giftLovelace` lovelace.
+      *
+      * Picks a wallet UTxO as the one-shot seed (spending it is what makes the gift-card token
+      * unique), parameterises the minting policy and redeem validator with it, mints one token, and
+      * locks the gift plus the token at the redeem address.
+      *
+      * @param giftLovelace
+      *   lovelace to lock in the card (must cover the min-UTxO for an output carrying a token)
+      * @return
+      *   either an error message or details of the created card
+      */
+    def createGiftCard(giftLovelace: Long): Either[String, CreatedGiftCard] = {
+        Try {
+            val walletUtxos = ctx.provider
+                .findUtxos(ctx.address)
+                .await(30.seconds)
+                .getOrElse(sys.error("could not query wallet UTxOs"))
+            val (seedInput, seedOutput) =
+                walletUtxos.headOption.getOrElse(
+                  sys.error("wallet has no UTxOs to seed a gift card")
                 )
-                .requireSignature(ctx.addrKeyHash)
-                .payTo(ctx.address, mintedValue)
+            val seed = TxOutRef(TxId(seedInput.transactionId), BigInt(seedInput.index))
+
+            val giftCardScript = GiftCardContract.makeGiftCardScript(tokenName, seed)
+            val policyId = giftCardScript.script.scriptHash
+            val redeemScript = GiftCardContract.makeRedeemScript(tokenName, policyId)
+            val redeemAddress = redeemScript.address(ctx.cardanoInfo.network)
+            val lockedValue = Value.asset(policyId, assetName, 1L, Coin(giftLovelace))
+
+            val tx = TxBuilder(ctx.cardanoInfo)
+                .spend(Utxo(seedInput, seedOutput))
+                .mint(giftCardScript, Map(assetName -> 1L), Action.Mint)
+                .payTo(redeemScript, lockedValue, seed.toData)
                 .complete(ctx.provider, sponsor = ctx.address)
                 .await(30.seconds)
                 .sign(ctx.signer)
                 .transaction
+
+            println(tx.showDetailed)
+            val hash = submit(tx)
+            CreatedGiftCard(
+              txHash = hash,
+              seed = seed,
+              redeemAddress = redeemAddress.encode.getOrElse(redeemAddress.toString),
+              unit = (policyId ++ tokenName).toHex
+            )
         }.toEither.left.map(_.getMessage)
     }
 
-    /** Builds a transaction that burns existing tokens.
+    /** Redeem a previously created gift card: burn its token and release the locked gift back to the
+      * wallet.
       *
-      * Burning uses a negative mint amount. The tokens to burn must exist in the UTxOs being spent.
-      *
-      * @param amount
-      *   number of tokens to burn (should be negative)
+      * @param seed
+      *   the one-shot seed the card was created with (from [[CreatedGiftCard]]); with the app's
+      *   token name it pins down the policy ID and redeem address.
       * @return
-      *   either an error message or the signed transaction
+      *   either an error message or the redeeming transaction's hash (hex)
       */
-    def makeBurningTx(amount: Long): Either[String, Transaction] = {
+    def redeemGiftCard(seed: TxOutRef): Either[String, String] = {
         Try {
-            val assetName = AssetName(ctx.tokenNameByteString)
-            val assets = Map(assetName -> amount)
+            val giftCardScript = GiftCardContract.makeGiftCardScript(tokenName, seed)
+            val policyId = giftCardScript.script.scriptHash
+            val redeemScript = GiftCardContract.makeRedeemScript(tokenName, policyId)
+            val redeemAddress = redeemScript.address(ctx.cardanoInfo.network)
 
-            TxBuilder(ctx.cardanoInfo)
-                .mint(
-                  compiled = ctx.mintingScript,
-                  assets = assets,
-                  redeemer = Data.unit
-                )
-                .requireSignature(ctx.addrKeyHash)
+            val utxos = ctx.provider
+                .findUtxos(redeemAddress)
+                .await(30.seconds)
+                .getOrElse(sys.error("could not query the redeem address"))
+            val (giftInput, giftOutput) = utxos
+                .find { case (_, out) =>
+                    out.value.assets.assets.get(policyId).exists(_.contains(assetName))
+                }
+                .getOrElse(sys.error("no gift-card UTxO found at the redeem address"))
+
+            val tx = TxBuilder(ctx.cardanoInfo)
+                // The redeem validator ignores its redeemer — burning the token authorises the spend.
+                .spend(Utxo(giftInput, giftOutput), (_: Transaction) => Data.unit, redeemScript)
+                .mint(giftCardScript, Map(assetName -> -1L), Action.Burn)
                 .complete(ctx.provider, sponsor = ctx.address)
                 .await(30.seconds)
                 .sign(ctx.signer)
                 .transaction
+
+            println(tx.showDetailed)
+            submit(tx)
         }.toEither.left.map(_.getMessage)
     }
 
-    /** Builds, signs, and submits a minting or burning transaction to the network.
-      *
-      * A positive amount mints tokens; a negative amount burns them. The two need different
-      * transaction shapes: minting pays the created tokens to an output, while burning must not add
-      * them to any output - a negative quantity in an output is not even encodable in the
-      * transaction wire format.
-      *
-      * @param amount
-      *   number of tokens to mint (positive) or burn (negative)
-      * @return
-      *   either an error message or the transaction hash (hex)
-      */
-    def submitMintingTx(amount: Long): Either[String, String] = {
-        for
-            tx <-
-                if amount > 0 then makeMintingTx(amount)
-                else if amount < 0 then makeBurningTx(amount)
-                else Left("amount must be non-zero")
-            // Show the full transaction structure - inputs, outputs, mint field, witnesses
-            _ = println(tx.showDetailed)
-            result <- ctx.provider.submit(tx).await(30.seconds).left.map(_.toString)
-        yield result.toHex
-    }
+    /** Submit a signed transaction, returning its hash (hex) or throwing on a submit error. */
+    private def submit(tx: Transaction): String =
+        ctx.provider.submit(tx).await(30.seconds) match
+            case Right(hash) => hash.toHex
+            case Left(err)   => sys.error(err.toString)
 }
 
 === protocol/src/main/scala/app/Server.scala ===
 package app
 
-import scalus.uplc.builtin.{ByteString, Data}
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.{AddrKeyHash, CardanoInfo}
+import scalus.uplc.builtin.ByteString
+import scalus.cardano.address.{Address, Network}
+import scalus.cardano.ledger.CardanoInfo
 import scalus.utils.await
 
 import scala.concurrent.duration.*
 import scalus.cardano.node.{BlockchainProvider, BlockfrostProvider}
 import scalus.cardano.txbuilder.TransactionSigner
 import scalus.cardano.wallet.hd.HdAccount
-import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.crypto.ed25519.Ed25519Signer
-import scalus.uplc.PlutusV3
 import sttp.client4.DefaultFutureBackend
 import sttp.tapir.*
 import sttp.tapir.server.netty.sync.NettySyncServer
@@ -569,21 +633,21 @@ given sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
 
 /** Application context holding all configuration and dependencies.
   *
-  * This is the central configuration object that wires together:
-  *   - Network connection (via Provider)
-  *   - Wallet/signing capabilities
-  *   - Minting script configuration
+  * Wires together the network connection (via provider), the wallet/signing capabilities, and the
+  * gift-card token name. The gift-card scripts themselves are *not* here: each card is parameterised
+  * by its own one-shot seed UTxO, so its policy ID and redeem address are computed per card in
+  * [[Transactions]].
   *
   * @param cardanoInfo
   *   protocol parameters and network configuration
   * @param provider
-  *   blockchain data provider (Blockfrost or local node)
+  *   blockchain data provider (Blockfrost or a local devnet)
   * @param account
   *   HD wallet account for address derivation
   * @param signer
   *   transaction signer with private keys
   * @param tokenName
-  *   name of the token this instance will mint/burn
+  *   the name of the gift-card token minted/burned
   */
 case class AppCtx(
     cardanoInfo: CardanoInfo,
@@ -592,22 +656,8 @@ case class AppCtx(
     signer: TransactionSigner,
     tokenName: String
 ) {
-
-    /** Public key hash for use in Plutus scripts (on-chain format) */
-    lazy val pubKeyHash: PubKeyHash = PubKeyHash(account.paymentKeyHash)
-
-    /** Address key hash for transaction building (off-chain format) */
-    lazy val addrKeyHash: AddrKeyHash = account.paymentKeyHash
-
     lazy val tokenNameByteString: ByteString = ByteString.fromString(tokenName)
     lazy val address: Address = account.baseAddress(cardanoInfo.network)
-
-    /** Full asset identifier: policy ID + token name (used for lookups) */
-    lazy val unitName: String = (mintingScript.script.scriptHash ++ tokenNameByteString).toHex
-
-    /** The configured minting policy script, parameterized with our admin key and token name */
-    lazy val mintingScript: PlutusV3[Data => Unit] =
-        MintingPolicyContract.makeMintingPolicyScript(pubKeyHash, tokenNameByteString)
 }
 
 /** Factory methods for creating AppCtx for different environments. */
@@ -623,7 +673,7 @@ object AppCtx {
       *     `CARDANO_NETWORK` (preview | preprod | mainnet; default preview).
       *
       * @param tokenName
-      *   name for the token to mint
+      *   name for the gift-card token
       */
     def fromEnv(tokenName: String)(using Ed25519Signer): AppCtx = {
         val env = DotEnv.load()
@@ -647,17 +697,7 @@ object AppCtx {
                 apply(network, mnemonic, apiKey, tokenName)
     }
 
-    /** Creates an AppCtx for a public network (mainnet / preprod / preview) using Blockfrost.
-      *
-      * @param network
-      *   one of "mainnet", "preprod", "preview"
-      * @param mnemonic
-      *   seed phrase for wallet derivation
-      * @param blockfrostApiKey
-      *   API key from blockfrost.io
-      * @param tokenName
-      *   name for the token to mint
-      */
+    /** Creates an AppCtx for a public network (mainnet / preprod / preview) using Blockfrost. */
     def apply(
         network: String,
         mnemonic: String,
@@ -671,89 +711,87 @@ object AppCtx {
 
         val account = HdAccount.fromMnemonic(mnemonic)
 
-        new AppCtx(
-          provider.cardanoInfo,
-          provider,
-          account,
-          account.signerForUtxos,
-          tokenName
-        )
+        new AppCtx(provider.cardanoInfo, provider, account, account.signerForUtxos, tokenName)
     }
 
     /** Creates an AppCtx for local development with Yaci DevKit.
       *
       * Uses a hardcoded test mnemonic and connects to a local Yaci DevKit node. No API keys
-      * required - perfect for development and testing.
-      *
-      * Prerequisites: a local Yaci DevKit devnet running (the devnet component's `just dev`, or see
-      * https://devkit.yaci.xyz).
-      *
-      * @param tokenName
-      *   name for the token to mint
+      * required. Prerequisites: a local Yaci DevKit devnet running (the devnet component's
+      * `just dev`, or see https://devkit.yaci.xyz).
       */
     def yaciDevKit(tokenName: String)(using Ed25519Signer): AppCtx = {
         // Standard test mnemonic - DO NOT use in production!
         val mnemonic =
             "test test test test test test test test test test test test test test test test test test test test test test test sauce"
 
-        // Connect to local Yaci DevKit Blockfrost-compatible API
         val provider = BlockfrostProvider.localYaci().await(30.seconds)
-
         val account = HdAccount.fromMnemonic(mnemonic)
 
-        new AppCtx(
-          provider.cardanoInfo,
-          provider,
-          account,
-          account.signerForUtxos,
-          tokenName
-        )
+        new AppCtx(provider.cardanoInfo, provider, account, account.signerForUtxos, tokenName)
     }
 }
 
-/** REST API server for the token minting service.
+/** REST API server for the gift-card service.
   *
   * Built with Tapir for type-safe endpoint definitions and automatic OpenAPI generation. Swagger UI
   * is available at /docs for interactive API exploration.
+  *
+  *   - `POST /gift-card?lovelace=N` — create a gift card locking N lovelace; returns the tx hash.
+  *   - `POST /redeem` — redeem the gift card most recently created by this server.
   *
   * @param ctx
   *   application context with blockchain connection and signing capabilities
   */
 class Server(ctx: AppCtx):
-    // Define the mint endpoint using Tapir's type-safe DSL
-    // PUT /mint?amount=100 -> returns transaction hash or error
-    // A negative amount burns tokens instead (PUT /mint?amount=-100)
-    private val mint = endpoint.put
-        .in("mint")
-        .in(query[Long]("amount"))
-        .out(stringBody)
-        .errorOut(stringBody)
-        .handle(mintTokens)
-
     private val txBuilder = Transactions(ctx)
 
-    private val apiEndpoints = List(mint)
+    // The last gift card this server created, so `/redeem` knows which card to redeem without the
+    // caller having to pass its seed back. A real frontend would track cards per user instead.
+    private var lastCard: Option[scalus.cardano.onchain.plutus.v3.TxOutRef] = None
 
-    // Auto-generate Swagger/OpenAPI documentation from endpoint definitions
+    private val create = endpoint.post
+        .in("gift-card")
+        .in(query[Long]("lovelace"))
+        .out(stringBody)
+        .errorOut(stringBody)
+        .handle(createGiftCard)
+
+    private val redeem = endpoint.post
+        .in("redeem")
+        .out(stringBody)
+        .errorOut(stringBody)
+        .handle(_ => redeemGiftCard())
+
+    private val apiEndpoints = List(create, redeem)
+
     private val swaggerEndpoints = SwaggerInterpreter()
-        .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Token Minter", "0.1")
+        .fromEndpoints[[X] =>> X](apiEndpoints.map(_.endpoint), "Gift Card", "0.1")
 
-    /** Handles mint requests by building and submitting a transaction. */
-    private def mintTokens(amount: Long): Either[String, String] =
-        val result = txBuilder.submitMintingTx(amount)
-        result match
-            case Left(value) =>
-                println(s"Error minting tokens: $value")
-            case Right(value) =>
-                println(s"Tokens minted successfully: $value")
-        result
+    private def createGiftCard(lovelace: Long): Either[String, String] =
+        txBuilder.createGiftCard(lovelace) match
+            case Right(card) =>
+                synchronized { lastCard = Some(card.seed) }
+                println(s"Created gift card ${card.unit} at ${card.redeemAddress}: ${card.txHash}")
+                Right(s"created ${card.unit} in tx ${card.txHash}; redeem with POST /redeem")
+            case Left(err) =>
+                println(s"Error creating gift card: $err")
+                Left(err)
 
-    /** Starts the HTTP server on port 8088.
-      *
-      * Endpoints:
-      *   - PUT /mint?amount=N - Mint N tokens (negative burns)
-      *   - GET /docs - Swagger UI
-      */
+    private def redeemGiftCard(): Either[String, String] =
+        synchronized(lastCard) match
+            case None => Left("no gift card to redeem — create one first with POST /gift-card")
+            case Some(seed) =>
+                txBuilder.redeemGiftCard(seed) match
+                    case Right(hash) =>
+                        synchronized { lastCard = None }
+                        println(s"Redeemed gift card in tx $hash")
+                        Right(s"redeemed in tx $hash")
+                    case Left(err) =>
+                        println(s"Error redeeming gift card: $err")
+                        Left(err)
+
+    /** Starts the HTTP server on port 8088 (Swagger UI at /docs). */
     def start(): Unit =
         NettySyncServer()
             .port(8088)
@@ -851,92 +889,87 @@ import scalus.utils.Hex.toHex
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Paths}
 
-/** The token this example mints/burns. Change it and watch the policy ID change. */
-private val ExampleTokenName = "CO2 Tonne"
+/** The gift-card token this example mints/burns. Change it and watch the policy ID change. */
+private val ExampleTokenName = "Gift Card"
 
-/** Write the CIP-57 blueprint for the minting policy to `path`.
+/** Write the CIP-57 blueprint for the gift-card validators to `path`.
   *
   * This is the on-chain interface-contract seam: the blueprint is the canonical, tool-agnostic
-  * description of the compiled validator that every other component reads from
-  * `../blueprint/plutus.json`. Called by `just build` in the on-chain / fullstack layouts.
+  * description of the compiled validators that every other component reads from
+  * `../blueprint/plutus.json`. Called by `just build`.
   */
 @main def genBlueprint(path: String): Unit = {
-    val json = MintingPolicyContract.blueprint.toJson()
+    val json = GiftCardContract.blueprint.toJson()
     val out = Paths.get(path)
     Option(out.getParent).foreach(Files.createDirectories(_))
     Files.write(out, json.getBytes(StandardCharsets.UTF_8))
-    println(s"Wrote CIP-57 blueprint for the minting policy to $path")
+    println(s"Wrote CIP-57 blueprint for the gift-card validators to $path")
 }
 
-/** Cross-check the on-chain blueprint at `path` against this component's bundled minting policy.
+/** Cross-check the on-chain blueprint at `path` against this component's bundled gift-card
+  * validators.
   *
   * Used by the off-chain `just build`: it consumes the interface-contract blueprint and reports
-  * whether it matches the validator this off-chain example builds transactions for. Missing or
+  * whether it matches the validators this off-chain example builds transactions for. Missing or
   * mismatched blueprints only warn — the off-chain code still compiles and runs against its own
-  * bundled policy.
+  * bundled validators.
   */
 @main def verifyBlueprint(path: String): Unit = {
     val out = Paths.get(path)
     if (!Files.exists(out))
         println(
           s"[blueprint] $path not found yet — build the on-chain component to produce it. " +
-              "Off-chain still compiles and runs against its bundled minting policy."
+              "Off-chain still compiles and runs against its bundled gift-card validators."
         )
     else {
-        val onDisk = Blueprint.fromJson(Files.readString(out)).validators.headOption
-            .flatMap(_.compiledCode)
-        val ours = MintingPolicyContract.compiled.program.cborEncoded.toHex
-        onDisk match
-            case Some(code) if code == ours =>
-                println("[blueprint] OK — the on-chain blueprint matches the bundled minting policy.")
-            case Some(_) =>
-                println(
-                  s"[blueprint] NOTE: $path describes a different contract than this off-chain " +
-                      "example's bundled minting policy. That is expected when Scalus off-chain is " +
-                      "paired with a non-Scalus on-chain tool; adapt Transactions.scala to it."
-                )
-            case None =>
-                println(s"[blueprint] WARNING: no compiledCode found in $path.")
+        val onDisk = Blueprint.fromJson(Files.readString(out)).validators.flatMap(_.compiledCode).toSet
+        val ours = Set(
+          GiftCardContract.giftCardCompiled.program.cborEncoded.toHex,
+          GiftCardContract.redeemCompiled.program.cborEncoded.toHex
+        )
+        if (ours.subsetOf(onDisk))
+            println("[blueprint] OK — the on-chain blueprint matches the bundled gift-card validators.")
+        else if (onDisk.isEmpty)
+            println(s"[blueprint] WARNING: no compiledCode found in $path.")
+        else
+            println(
+              s"[blueprint] NOTE: $path describes a different contract than this off-chain " +
+                  "example's bundled gift-card validators. That is expected when Scalus off-chain is " +
+                  "paired with a non-Scalus on-chain tool; adapt Transactions.scala to it."
+            )
     }
 }
 
-/** Start the minting REST API, choosing the network from the shared `../.env` (see AppCtx.fromEnv):
-  * a local devnet if one is running, otherwise Blockfrost.
+/** Start the gift-card REST API, choosing the network from the shared `../.env` (see
+  * AppCtx.fromEnv): a local devnet if one is running, otherwise Blockfrost.
   */
 @main def start(): Unit = {
     Logging.configure()
     val ctx = AppCtx.fromEnv(ExampleTokenName)
-    println("Starting the minting server on http://localhost:8088 (Swagger UI at /docs) ...")
+    println("Starting the gift-card server on http://localhost:8088 (Swagger UI at /docs) ...")
     Server(ctx).start()
 }
 
-/** Start the minting REST API against a local Yaci DevKit devnet (built-in test wallet). */
+/** Start the gift-card REST API against a local Yaci DevKit devnet (built-in test wallet). */
 @main def yaciDevKit(): Unit = {
     Logging.configure()
     val ctx = AppCtx.yaciDevKit(ExampleTokenName)
-    println("Starting the minting server against a local Yaci DevKit devnet on http://localhost:8088 ...")
+    println("Starting the gift-card server against a local Yaci DevKit devnet on http://localhost:8088 ...")
     Server(ctx).start()
 }
 
-=== protocol/src/test/scala/app/MintingPolicyTest.scala ===
+=== protocol/src/test/scala/app/GiftCardTest.scala ===
 package app
 
 import org.scalatest.funsuite.AnyFunSuite
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scalus.*
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.ByteString.utf8
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.platform
-import scalus.cardano.ledger.{AddrKeyHash, AssetName, CardanoInfo}
-import scalus.cardano.onchain.plutus.v1.{PubKeyHash, Value}
-import scalus.cardano.onchain.plutus.v1.Value.*
-import scalus.cardano.onchain.plutus.v3.*
+import scalus.cardano.ledger.{AssetName, CardanoInfo}
 import scalus.cardano.onchain.plutus.prelude.*
+import scalus.cardano.onchain.plutus.v3.{TxId, TxOutRef}
 import scalus.cardano.txbuilder.{RedeemerPurpose, txBuilder}
-import scalus.cardano.wallet.hd.HdAccount
-import scalus.crypto.ed25519.given
 import scalus.testing.kit.ScalusTest
 import scalus.testing.kit.TestUtil.getScriptContextV3
 import scalus.uplc.*
@@ -949,128 +982,117 @@ enum Expected {
     case Failure(reason: String)
 }
 
-/** Unit tests for the minting policy, run BOTH as a plain Scala function (debuggable, breakpoints
-  * work) and as a compiled Plutus script on the built-in evaluator — no blockchain, milliseconds
-  * per test.
+/** Unit tests for the two gift-card validators, run BOTH as plain Scala functions (debuggable,
+  * breakpoints work) and as compiled Plutus scripts on the built-in evaluator — no blockchain,
+  * milliseconds per test.
+  *
+  * The full create → redeem happy path (which spends the one-shot seed and burns the token across a
+  * multi-transaction flow) is exercised end-to-end against the in-memory emulator in the off-chain
+  * and fullstack variants; here we drive each validator's logic directly.
   */
-class MintingPolicyTest extends AnyFunSuite with ScalaCheckPropertyChecks with ScalusTest {
+class GiftCardTest extends AnyFunSuite with ScalusTest {
     import Expected.*
 
     private given env: CardanoInfo = CardanoInfo.mainnet
 
-    private val account = HdAccount.fromMnemonic(
-      "test test test test test test test test test test test test test test test test test test test test test test test sauce"
-    )
+    private val tokenName = utf8"Gift Card"
+    // A dummy seed for parameterisation. The one-shot check (seed must be an input) is covered
+    // end-to-end by the emulator tests; here we exercise the token-name/amount branches.
+    private val seed = TxOutRef(TxId(ByteString.fromHex("00" * 32)), BigInt(0))
 
-    private val tokenName = utf8"CO2 Tonne"
+    private val giftCardScript = GiftCardContract.makeGiftCardScript(tokenName, seed)
+    private val policyId = giftCardScript.script.scriptHash
+    private val redeemScript = GiftCardContract.makeRedeemScript(tokenName, policyId)
 
-    private val adminPubKeyHash: PubKeyHash = PubKeyHash(account.paymentKeyHash)
+    // --- Minting policy: creating (Mint) and destroying (Burn) the gift-card token ---
 
-    private val config = MintingConfig(adminPubKeyHash, tokenName)
-
-    private val mintingScript =
-        MintingPolicyContract.makeMintingPolicyScript(adminPubKeyHash, tokenName)
-
-    test("should fail when minted token name is not correct") {
-        val wrongTokenName = tokenName ++ utf8"extra"
-        val ctx = makeScriptContext(
-          mint = Map(AssetName(wrongTokenName) -> 1000L),
-          requiredSigners = Set(account.paymentKeyHash)
+    test("mint fails when the one-shot seed UTxO is not spent") {
+        val ctx = mintContext(Map(AssetName(tokenName) -> 1L), Action.Mint)
+        val ex = intercept[Exception](
+          GiftCard.giftCardPolicy(tokenName, seed, Action.Mint, policyId, ctx.txInfo)
         )
-
-        val exception = intercept[Exception] {
-            MintingPolicy.validate(config.toData)(ctx.toData)
-        }
-        assert(exception.getMessage == "Token name not found")
-
-        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+        assert(ex.getMessage == "Seed UTxO not spent")
+        // The blueprint scripts are compiled for release (no error traces), so on-chain a failed
+        // `require` surfaces only as a generic evaluation error, not the Scala-side message above.
+        assertEval(giftCardScript.program $ ctx.toData, Failure("Error evaluated"))
     }
 
-    test("should fail when extra tokens are minted/burned") {
-        val ctx = makeScriptContext(
-          mint = Map(AssetName(tokenName) -> 1000L, AssetName(utf8"Extra") -> 1000L),
-          requiredSigners = Set(account.paymentKeyHash)
+    test("mint fails when the token name is wrong") {
+        val ctx = mintContext(Map(AssetName(tokenName ++ utf8"!") -> 1L), Action.Mint)
+        val ex = intercept[Exception](
+          GiftCard.giftCardPolicy(tokenName, seed, Action.Mint, policyId, ctx.txInfo)
         )
-
-        val exception = intercept[Exception] {
-            MintingPolicy.validate(config.toData)(ctx.toData)
-        }
-        assert(exception.getMessage == "Multiple tokens found")
-
-        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+        assert(ex.getMessage == "Wrong token name")
     }
 
-    test("should fail when admin signature is not provided") {
-        val ctx = makeScriptContext(
-          mint = Map(AssetName(tokenName) -> 1000L),
-          requiredSigners = Set.empty
+    test("mint fails when more than one token is minted") {
+        val ctx = mintContext(Map(AssetName(tokenName) -> 2L), Action.Mint)
+        val ex = intercept[Exception](
+          GiftCard.giftCardPolicy(tokenName, seed, Action.Mint, policyId, ctx.txInfo)
         )
-
-        val exception = intercept[Exception] {
-            MintingPolicy.validate(config.toData)(ctx.toData)
-        }
-        assert(exception.getMessage == "Not signed by admin")
-
-        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
+        assert(ex.getMessage == "Mint must create exactly one token")
     }
 
-    test("should fail when admin signature is not correct") {
-        val ctx = makeScriptContext(
-          mint = Map(AssetName(tokenName) -> 1000L),
-          requiredSigners = Set(AddrKeyHash(platform.blake2b_224(ByteString.fromString("wrong"))))
+    test("mint fails when a second token name rides along") {
+        val ctx = mintContext(
+          Map(AssetName(tokenName) -> 1L, AssetName(utf8"Extra") -> 1L),
+          Action.Mint
         )
-
-        val exception = intercept[Exception] {
-            MintingPolicy.validate(config.toData)(ctx.toData)
-        }
-        assert(exception.getMessage == "Not signed by admin")
-
-        assertEval(mintingScript.program $ ctx.toData, Failure("Error evaluated"))
-    }
-
-    test("should succeed when minted token name is correct and admin signature is correct") {
-        val ctx = makeScriptContext(
-          mint = Map(AssetName(tokenName) -> 1000L),
-          requiredSigners = Set(account.paymentKeyHash)
+        val ex = intercept[Exception](
+          GiftCard.giftCardPolicy(tokenName, seed, Action.Mint, policyId, ctx.txInfo)
         )
-        // run the minting policy script as a Scala function
-        // here you can use a debugger to step through the minting policy logic
-        MintingPolicy.validate(config.toData)(ctx.toData)
-        // run the minting policy script as a Plutus script
-        assertEval(mintingScript.program $ ctx.toData, Success)
+        assert(ex.getMessage == "Exactly one gift-card token must be minted or burned")
     }
 
-    test("compiles to a non-empty Plutus V3 script") {
-        val size = mintingScript.program.cborEncoded.length
-        info(s"minting policy script size: $size bytes")
-        assert(size > 0)
+    test("burn succeeds when exactly one token is destroyed") {
+        val ctx = mintContext(Map(AssetName(tokenName) -> -1L), Action.Burn)
+        GiftCard.giftCardPolicy(tokenName, seed, Action.Burn, policyId, ctx.txInfo) // Scala function
+        assertEval(giftCardScript.program $ ctx.toData, Success) // Plutus script
     }
 
-    private def makeScriptContext(
-        mint: Map[AssetName, Long],
-        requiredSigners: Set[AddrKeyHash]
-    ) = {
-        val mintValue = mint.foldLeft(Value.zero) { case (acc, (assetName, qty)) =>
-            acc + Value(mintingScript.script.scriptHash, assetName.bytes, BigInt(qty))
-        }
+    test("burn fails when more than one token is destroyed") {
+        val ctx = mintContext(Map(AssetName(tokenName) -> -2L), Action.Burn)
+        val ex = intercept[Exception](
+          GiftCard.giftCardPolicy(tokenName, seed, Action.Burn, policyId, ctx.txInfo)
+        )
+        assert(ex.getMessage == "Burn must destroy exactly one token")
+    }
+
+    // --- Redeem validator: releases the locked gift only when the token is burned ---
+
+    test("redeem succeeds when the gift-card token is burned in the same transaction") {
+        val ctx = mintContext(Map(AssetName(tokenName) -> -1L), Action.Burn)
+        // The redeem validator only inspects the mint field, so we drive it directly with the
+        // burn transaction's info.
+        Redeem.redeemValidator(tokenName, policyId, ctx.txInfo)
+    }
+
+    test("redeem fails when nothing of the gift-card policy is burned") {
+        val otherPolicy = redeemScript.script.scriptHash // a different policy id
+        val ctx = mintContext(Map(AssetName(tokenName) -> -1L), Action.Burn)
+        val ex = intercept[Exception](Redeem.redeemValidator(tokenName, otherPolicy, ctx.txInfo))
+        assert(ex.getMessage == "Gift-card token not burned")
+    }
+
+    test("both validators compile to non-empty Plutus V3 scripts") {
+        assert(giftCardScript.program.cborEncoded.length > 0)
+        assert(redeemScript.program.cborEncoded.length > 0)
+    }
+
+    /** A minting/burning ScriptContext for this policy: builds a draft transaction that mints the
+      * given assets under `policyId`, tagged with `action` as the mint redeemer.
+      */
+    private def mintContext(mint: Map[AssetName, Long], action: Action) = {
         val tx = txBuilder
-            .mint(
-              script = mintingScript.script,
-              assets = mint,
-              redeemer = Data.unit
-            )
-            .requireSignatures(requiredSigners)
-            .payTo(account.baseAddress(env.network), mintValue.toLedgerValue)
+            .mint(script = giftCardScript.script, assets = mint, redeemer = action.toData)
             .draft
-
-        tx.getScriptContextV3(Map.empty, RedeemerPurpose.ForMint(mintingScript.script.scriptHash))
+        tx.getScriptContextV3(Map.empty, RedeemerPurpose.ForMint(policyId))
     }
 
     private def assertEval(p: Program, expected: Expected): Unit = {
         val result = p.evaluateDebug
         (result, expected) match
-            case (_: Result.Success, Expected.Success) =>
-                () // succeeded, as expected
+            case (_: Result.Success, Expected.Success) => ()
             case (result: Result.Failure, Expected.Failure(expected)) =>
                 assert(
                   result.exception.getMessage.startsWith(expected),
@@ -1098,7 +1120,9 @@ trait EmulatorTest { self: Suite =>
             "test test test test test test test test test test test test test test test test test test test test test test test sauce"
         val account = HdAccount.fromMnemonic(mnemonic)
         val address = account.baseAddress(Network.Mainnet)
-        val emulator = Emulator.withAddresses(Seq(address))
+        // Fund the wallet with several UTxOs (like a real wallet): the gift-card flow spends one as
+        // the one-shot seed and still needs others to cover the fee and the Plutus collateral.
+        val emulator = Emulator.withAddresses(Seq.fill(5)(address))
         new AppCtx(
           emulator.cardanoInfo,
           emulator,
@@ -1121,22 +1145,17 @@ import scalus.cardano.ledger.AssetName
 trait TransactionsTestBase { self: AnyFunSuite =>
     def createAppCtx(tokenName: String): AppCtx
 
-    test("create minting transaction") {
-        val appCtx = createAppCtx("CO2 Tonne")
+    test("createGiftCard mints one token and locks the gift at the redeem address") {
+        val appCtx = createAppCtx("Gift Card")
         val txBuilder = Transactions(appCtx)
 
-        txBuilder.makeMintingTx(1000) match
-            case Right(tx) =>
-                println(s"minting tx: ${tx.id.toHex}")
-                val mint = tx.body.value.mint
-                assert(mint.nonEmpty)
-                val expectedAssetName = AssetName(appCtx.tokenNameByteString)
-                val mintedAmount = mint
-                    .flatMap(_.assets.get(appCtx.mintingScript.script.scriptHash))
-                    .flatMap(_.get(expectedAssetName))
-                assert(mintedAmount.contains(1000L))
-                // Check that the transaction has witnesses
-                assert(tx.witnessSet.vkeyWitnesses.toSet.nonEmpty)
+        txBuilder.createGiftCard(5_000_000L) match
+            case Right(card) =>
+                println(s"created gift card: ${card.txHash}")
+                // The card's unit is its policy id (28 bytes = 56 hex chars) followed by the token
+                // name in hex — non-empty, so a real token was parameterised and minted.
+                assert(card.unit.length > 56)
+                assert(card.redeemAddress.nonEmpty)
             case Left(err) => fail(err)
     }
 }
@@ -1145,33 +1164,53 @@ trait TransactionsTestBase { self: AnyFunSuite =>
 package app
 
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.AssetName
 import scalus.utils.await
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.*
 
-/** End-to-end mint + burn against the in-memory emulator — the full off-chain flow with no
-  * blockchain: build, submit, confirm, then verify the tokens were burned.
+/** End-to-end create + redeem against the in-memory emulator — the full gift-card flow with no
+  * blockchain: mint and lock the card, then burn it and release the gift, verifying the token is
+  * gone at each stage.
   */
 class TransactionsEmulatorTest extends AnyFunSuite with TransactionsTestBase with EmulatorTest {
 
-    test("submitMintingTx burns tokens when the amount is negative") {
-        val appCtx = createAppCtx("CO2 Tonne")
+    test("a gift card can be created and then redeemed, burning its token") {
+        val appCtx = createAppCtx("Gift Card")
         val txBuilder = Transactions(appCtx)
 
-        assert(txBuilder.submitMintingTx(1000).isRight)
-        assert(txBuilder.submitMintingTx(-1000).isRight)
+        val card = txBuilder.createGiftCard(5_000_000L) match
+            case Right(c)  => c
+            case Left(err) => fail(s"create failed: $err")
 
-        val utxos = appCtx.provider.findUtxos(appCtx.address).await(10.seconds).toOption.get
-        val tokenUtxos = utxos.filter { case (_, utxo) =>
-            utxo.value.assets.assets.contains(appCtx.mintingScript.script.scriptHash)
-        }
-        assert(tokenUtxos.isEmpty, s"Expected all tokens burned but found: $tokenUtxos")
+        // After creation the token is locked at the redeem address, not in the wallet.
+        assert(walletHoldsGiftToken(appCtx, card).isEmpty, "token should be locked, not in the wallet")
+
+        assert(txBuilder.redeemGiftCard(card.seed).isRight, "redeem should succeed")
+
+        // After redeeming, the token is burned: it exists nowhere the wallet can see.
+        assert(walletHoldsGiftToken(appCtx, card).isEmpty, "token should be burned after redeem")
     }
 
-    test("submitMintingTx rejects a zero amount") {
-        val appCtx = createAppCtx("CO2 Tonne")
-        assert(Transactions(appCtx).submitMintingTx(0).isLeft)
+    test("redeem fails when there is no matching gift card at the redeem address") {
+        val appCtx = createAppCtx("Gift Card")
+        val txBuilder = Transactions(appCtx)
+
+        // Create then redeem once; a second redeem of the same card must fail (nothing left to spend).
+        val card = txBuilder.createGiftCard(5_000_000L).toOption.get
+        assert(txBuilder.redeemGiftCard(card.seed).isRight)
+        assert(txBuilder.redeemGiftCard(card.seed).isLeft)
+    }
+
+    /** UTxOs in the wallet that carry this card's gift-card token, if any. */
+    private def walletHoldsGiftToken(appCtx: AppCtx, card: CreatedGiftCard) = {
+        val policyId = GiftCardContract
+            .makeGiftCardScript(appCtx.tokenNameByteString, card.seed)
+            .script
+            .scriptHash
+        val utxos = appCtx.provider.findUtxos(appCtx.address).await(10.seconds).toOption.get
+        utxos.filter { case (_, out) => out.value.assets.assets.contains(policyId) }
     }
 }
 

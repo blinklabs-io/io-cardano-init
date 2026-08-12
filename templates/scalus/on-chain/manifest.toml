@@ -1,5 +1,5 @@
 [manifest]
-summary = "Scalus on-chain project: a Plutus V3 minting policy in Scala 3 that compiles to UPLC and writes a CIP-57 blueprint to ../blueprint/plutus.json"
+summary = "Scalus on-chain project: a gift-card one-shot minting policy and its redeem spending validator in Scala 3 (Plutus V3), compiled to UPLC, writing a CIP-57 blueprint to ../blueprint/plutus.json"
 
 [[files]]
 source = "Justfile.jinja"
@@ -22,17 +22,17 @@ source = "project/build.properties"
 dest = "project/build.properties"
 
 [[files]]
-source = "src/main/scala/app/MintingPolicy.scala"
-dest = "src/main/scala/app/MintingPolicy.scala"
+source = "src/main/scala/app/GiftCard.scala"
+dest = "src/main/scala/app/GiftCard.scala"
 
 [[files]]
-source = "src/main/scala/app/MintingPolicyContract.scala"
-dest = "src/main/scala/app/MintingPolicyContract.scala"
+source = "src/main/scala/app/GiftCardContract.scala"
+dest = "src/main/scala/app/GiftCardContract.scala"
 
 [[files]]
 source = "src/main/scala/app/Main.scala"
 dest = "src/main/scala/app/Main.scala"
 
 [[files]]
-source = "src/test/scala/app/MintingPolicyTest.scala"
-dest = "src/test/scala/app/MintingPolicyTest.scala"
+source = "src/test/scala/app/GiftCardTest.scala"
+dest = "src/test/scala/app/GiftCardTest.scala"

@@ -571,7 +571,7 @@ mod tests {
             .collect();
 
         assert!(dests.contains(&"protocol/Justfile".to_string()));
-        assert!(dests.contains(&"protocol/src/main/scala/app/MintingPolicy.scala".to_string()));
+        assert!(dests.contains(&"protocol/src/main/scala/app/GiftCard.scala".to_string()));
         assert!(dests.contains(&"protocol/src/main/scala/app/Main.scala".to_string()));
         // The protocol Justfile is emitted exactly once (not once per role).
         assert_eq!(
