@@ -15,7 +15,9 @@ trait EmulatorTest { self: Suite =>
             "test test test test test test test test test test test test test test test test test test test test test test test sauce"
         val account = HdAccount.fromMnemonic(mnemonic)
         val address = account.baseAddress(Network.Mainnet)
-        val emulator = Emulator.withAddresses(Seq(address))
+        // Fund the wallet with several UTxOs (like a real wallet): the gift-card flow spends one as
+        // the one-shot seed and still needs others to cover the fee and the Plutus collateral.
+        val emulator = Emulator.withAddresses(Seq.fill(5)(address))
         new AppCtx(
           emulator.cardanoInfo,
           emulator,

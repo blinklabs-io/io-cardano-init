@@ -1,17 +1,19 @@
 # On-chain component (Scalus)
 # Part of {{ project_name }}
 #
-# A Plutus V3 minting policy written in Scala 3. The Scalus compiler plugin
-# compiles it to Untyped Plutus Core (UPLC); `build` then writes the CIP-57
+# A gift-card contract written in Scala 3 (Plutus V3): a one-shot minting policy
+# that mints a unique gift-card token, plus a redeem spending validator that
+# releases the locked gift when that token is burned. The Scalus compiler plugin
+# compiles both to Untyped Plutus Core (UPLC); `build` then writes the CIP-57
 # blueprint to ../{{ blueprint_path }} for the off-chain / devnet / formal
 # components to consume.
 
-# Compile the validator and write the CIP-57 blueprint to ../{{ blueprint_path }}.
+# Compile the validators and write the CIP-57 blueprint to ../{{ blueprint_path }}.
 build:
     sbt "runMain app.genBlueprint ../{{ blueprint_path }}"
 
-# Unit tests: run the validator as a Scala function AND as a compiled Plutus
-# script on the built-in evaluator — no blockchain, milliseconds per test.
+# Unit tests: run the validators as Scala functions AND as compiled Plutus
+# scripts on the built-in evaluator — no blockchain, milliseconds per test.
 test:
     sbt test
 

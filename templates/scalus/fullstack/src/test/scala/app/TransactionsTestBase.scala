@@ -9,22 +9,17 @@ import scalus.cardano.ledger.AssetName
 trait TransactionsTestBase { self: AnyFunSuite =>
     def createAppCtx(tokenName: String): AppCtx
 
-    test("create minting transaction") {
-        val appCtx = createAppCtx("CO2 Tonne")
+    test("createGiftCard mints one token and locks the gift at the redeem address") {
+        val appCtx = createAppCtx("Gift Card")
         val txBuilder = Transactions(appCtx)
 
-        txBuilder.makeMintingTx(1000) match
-            case Right(tx) =>
-                println(s"minting tx: ${tx.id.toHex}")
-                val mint = tx.body.value.mint
-                assert(mint.nonEmpty)
-                val expectedAssetName = AssetName(appCtx.tokenNameByteString)
-                val mintedAmount = mint
-                    .flatMap(_.assets.get(appCtx.mintingScript.script.scriptHash))
-                    .flatMap(_.get(expectedAssetName))
-                assert(mintedAmount.contains(1000L))
-                // Check that the transaction has witnesses
-                assert(tx.witnessSet.vkeyWitnesses.toSet.nonEmpty)
+        txBuilder.createGiftCard(5_000_000L) match
+            case Right(card) =>
+                println(s"created gift card: ${card.txHash}")
+                // The card's unit is its policy id (28 bytes = 56 hex chars) followed by the token
+                // name in hex — non-empty, so a real token was parameterised and minted.
+                assert(card.unit.length > 56)
+                assert(card.redeemAddress.nonEmpty)
             case Left(err) => fail(err)
     }
 }

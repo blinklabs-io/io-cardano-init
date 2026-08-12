@@ -1,8 +1,11 @@
 # Off-chain component (Scalus) — transaction building
 # Part of {{ project_name }}
 #
-# Builds and submits mint/burn transactions for the minting policy with Scalus's
-# TxBuilder (UTxO selection, collateral, and balancing are automatic). Where
+# Builds and submits gift-card create/redeem transactions with Scalus's
+# TxBuilder (UTxO selection, collateral, and balancing are automatic). The
+# validators are taken from the interface-contract blueprint at
+# ../{{ blueprint_path }} — this component parameterises whatever contract the
+# on-chain tool produced, so build an on-chain component first. Where
 # transactions go is decided by the shared ../.env — this component never names
 # the tool that wrote it:
 #   • INDEXER_URL set (a local devnet, e.g. Yaci DevKit's `just dev`) → that
@@ -10,16 +13,17 @@
 #   • INDEXER_URL absent → Blockfrost (needs BLOCKFROST_API_KEY + MNEMONIC in
 #     .env.local — see .env.example).
 
-# Compile, then verify the on-chain blueprint at ../{{ blueprint_path }} matches
-# the bundled minting policy (only warns if it's absent or for another contract).
+# Compile the off-chain sources.
 build:
-    sbt "runMain app.verifyBlueprint ../{{ blueprint_path }}"
+    sbt compile
 
-# Unit tests on the built-in emulator — no blockchain, milliseconds per test.
+# Emulator tests of the create/redeem flow — no blockchain, milliseconds per
+# test. They parameterise the blueprint's validators, so they run only once an
+# on-chain component has produced ../{{ blueprint_path }} (skipped otherwise).
 test:
     sbt test
 
-# Run the minting REST API against whatever ../.env points at (local devnet or
+# Run the gift-card REST API against whatever ../.env points at (local devnet or
 # Blockfrost). Swagger UI at http://localhost:8088/docs. Long-running: Ctrl-C.
 dev:
     sbt "runMain app.start"

@@ -1,5 +1,5 @@
 [manifest]
-summary = "Scalus off-chain project: builds/submits mint & burn transactions for the minting policy (Scala 3 + TxBuilder), consuming ../blueprint/plutus.json"
+summary = "Scalus off-chain project: builds/submits gift-card create & redeem transactions (Scala 3 + TxBuilder), parameterising the validators it reads from ../blueprint/plutus.json"
 
 [[files]]
 source = "Justfile.jinja"
@@ -26,12 +26,12 @@ source = "project/build.properties"
 dest = "project/build.properties"
 
 [[files]]
-source = "src/main/scala/app/MintingPolicy.scala"
-dest = "src/main/scala/app/MintingPolicy.scala"
+source = "src/main/scala/app/GiftCardData.scala"
+dest = "src/main/scala/app/GiftCardData.scala"
 
 [[files]]
-source = "src/main/scala/app/MintingPolicyContract.scala"
-dest = "src/main/scala/app/MintingPolicyContract.scala"
+source = "src/main/scala/app/GiftCardScripts.scala"
+dest = "src/main/scala/app/GiftCardScripts.scala"
 
 [[files]]
 source = "src/main/scala/app/Transactions.scala"
@@ -52,10 +52,6 @@ dest = "src/main/scala/app/DotEnv.scala"
 [[files]]
 source = "src/main/scala/app/Main.scala"
 dest = "src/main/scala/app/Main.scala"
-
-[[files]]
-source = "src/test/scala/app/MintingPolicyTest.scala"
-dest = "src/test/scala/app/MintingPolicyTest.scala"
 
 [[files]]
 source = "src/test/scala/app/EmulatorTest.scala"

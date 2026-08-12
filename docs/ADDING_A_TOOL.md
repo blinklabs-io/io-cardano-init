@@ -159,6 +159,28 @@ The top-level project Justfile delegates to these by calling `just -f <role>/Jus
 
 `dev` is **optional** — add it only when your tool has a genuine long-running or interactive mode (don't ship a no-op `dev` just to fill the slot). It is **never aggregated** at the top level; the developer runs it directly (`just -f <role>/Justfile dev`). A `dev` that provisions a local chain endpoint writes the standard connection vars to `../.env` (see below).
 
+### The reference example: Gift Card
+
+Every on-chain, off-chain, and fullstack template implements the **same** example — a **gift card** — so that any on-chain tool genuinely composes with any off-chain one (an Aiken contract driven by the Scalus off-chain, a Scalus contract driven by the MeshJS off-chain, and so on). Matching it is what makes a new tool interoperable, not just self-consistent.
+
+The flow is two validators:
+
+- **`gift_card` (minting policy)** — a one-shot policy that mints exactly one token, gated by a specific seed UTxO that must be spent (so the policy id is unique). Burning that one token is the redeem step.
+- **`redeem` (spending validator)** — guards the gift locked at its script address; it only allows the UTxO to be spent when the gift-card token is burned in the same transaction.
+
+To stay interchangeable, keep the **wire ABI** identical across tools:
+
+| Aspect | Convention |
+|---|---|
+| Blueprint titles | `<module>.gift_card.mint` and `<module>.redeem.spend` — off-chain tools locate validators by the `<validator>.<purpose>` **suffix**, so the module prefix is free. |
+| `gift_card` parameters | Two **separate** compile-time parameters, applied with `applyParamsToScript`: the token name (`ByteString`) then the seed `OutputReference`. |
+| `redeem` parameters | Two separate parameters: the token name (`ByteString`) then the gift-card policy id (`ByteString`). |
+| Seed `OutputReference` | The flat shape `Constr 0 [transaction_id, output_index]` — the transaction id is a **bare** byte string, not wrapped in a `TxId` constructor (this is Aiken's `OutputReference` / MeshJS's `outputReference`). |
+| Mint redeemer | An `Action` enum: `Mint` = `Constr 0 []`, `Burn` = `Constr 1 []`. |
+| Redeem redeemer / datum | Unused by the validator — burning the token is the authorization. |
+
+An off-chain template consumes these by reading the compiled code straight from `../blueprint/plutus.json` and applying the parameters above (see **Off-chain tools** below), so it drives whatever on-chain tool produced the blueprint.
+
 ### Role-specific requirements
 
 **On-chain tools** must produce the CIP-57 Plutus blueprint during `build`:
@@ -171,7 +193,7 @@ build:
 
 The off-chain and devnet templates read from `../blueprint/plutus.json`. If your tool outputs to a different path, the `build` target must copy it to the canonical location. This is the primary integration seam between on-chain and off-chain.
 
-**Off-chain tools** must handle the case where no blueprint exists yet:
+**Off-chain tools** should build transactions against the validators **in the blueprint**, not a private recompiled copy — parameterize the `compiledCode` read from `../blueprint/plutus.json` (applying the gift-card parameters above). That is what makes the off-chain tool composable with *any* on-chain tool rather than only its own. They must also handle the case where no blueprint exists yet (a standalone off-chain project, before an on-chain component has built) — degrade gracefully, and gate any tests that need real scripts on the blueprint being present:
 
 ```justfile
 build:
