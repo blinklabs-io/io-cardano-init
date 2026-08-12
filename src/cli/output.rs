@@ -6,7 +6,7 @@ use crate::doctor::Report;
 use crate::doctor::installers::Installer;
 use crate::doctor::probe::{Environment, ScanResult};
 use crate::registry::loader::Registry;
-use crate::registry::types::{Role, Selection};
+use crate::registry::types::{Role, Selection, ToolDef};
 use crate::scaffold::planner::FilePlan;
 
 // ---------------------------------------------------------------------------
@@ -86,6 +86,70 @@ pub fn print_welcome() {
     println!();
 }
 
+/// The inline tag appended after an experimental tool's name in list-style
+/// output (`""` for released tools). Kept here so `list`, `--help`, and the
+/// interactive prompts render the marker identically.
+pub fn experimental_tag(tool: &ToolDef) -> &'static str {
+    if tool.experimental {
+        " [experimental]"
+    } else {
+        ""
+    }
+}
+
+/// The distinct experimental tools in a selection, in role order and
+/// de-duplicated (a fullstack tool assigned to both roles is reported once).
+/// Shared by the generation-time warning and the `--allow-experimental` gate.
+pub fn selected_experimental_tools<'a>(
+    selection: &Selection,
+    registry: &'a Registry,
+) -> Vec<&'a ToolDef> {
+    let mut out: Vec<&ToolDef> = Vec::new();
+    for a in &selection.assignments {
+        if let Some(tool) = registry.get(&a.tool_id)
+            && tool.experimental
+            && !out.iter().any(|t| t.id == tool.id)
+        {
+            out.push(tool);
+        }
+    }
+    out
+}
+
+/// Warn — loudly — when the selection includes any experimental tool, so a user
+/// never generates an unstable/incomplete tool without knowing it. Printed inside
+/// the pre-generation summary and again on success. (The hard gate is
+/// `--allow-experimental` / the interactive confirm; this is the reminder that
+/// fires once the tool is allowed through.) Silent when nothing experimental is
+/// selected.
+fn print_experimental_warning(selection: &Selection, registry: &Registry) {
+    let experimental_tools = selected_experimental_tools(selection, registry);
+    if experimental_tools.is_empty() {
+        return;
+    }
+
+    let names = experimental_tools
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    println!();
+    println!(
+        "  {} {}",
+        style("⚠ Experimental:").yellow().bold(),
+        style(names).yellow().bold()
+    );
+    println!(
+        "    {}",
+        style("These tools may be unstable or incomplete (the tool itself and/or its").yellow()
+    );
+    println!(
+        "    {}",
+        style("integration). Expect rough edges and breaking changes.").yellow()
+    );
+}
+
 /// Print a summary of the selection before generation.
 pub fn print_summary(selection: &Selection, registry: &Registry) {
     println!();
@@ -96,22 +160,24 @@ pub fn print_summary(selection: &Selection, registry: &Registry) {
     for component in components(selection, registry) {
         let role_label = component_label(&component.kebab);
 
-        let tool_info = if let Some(tool) = registry.get(&component.tool_id) {
+        let (tool_info, experimental) = if let Some(tool) = registry.get(&component.tool_id) {
             // Infra providers carry no user-facing language, so omit the
             // parenthetical rather than printing an empty "(?)".
-            match tool.languages.first() {
+            let info = match tool.languages.first() {
                 Some(lang) => format!("{} ({})", tool.name, lang),
                 None => tool.name.clone(),
-            }
+            };
+            (info, tool.experimental)
         } else {
-            component.tool_id.clone()
+            (component.tool_id.clone(), false)
         };
 
-        println!(
-            "  {:<12}{}",
-            format!("{}:", role_label),
+        let styled = if experimental {
+            style(format!("{tool_info}  [experimental]")).yellow()
+        } else {
             style(tool_info).cyan()
-        );
+        };
+        println!("  {:<12}{}", format!("{}:", role_label), styled);
     }
 
     println!("  Network:  {}", style(&selection.network).cyan());
@@ -119,6 +185,8 @@ pub fn print_summary(selection: &Selection, registry: &Registry) {
     if selection.nix {
         println!("  Nix:      {}", style("yes").green());
     }
+
+    print_experimental_warning(selection, registry);
     println!();
 }
 
@@ -175,7 +243,12 @@ fn component_label(kebab: &str) -> &'static str {
 fn components_json(selection: &Selection, registry: &Registry) -> serde_json::Value {
     let items: Vec<serde_json::Value> = components(selection, registry)
         .iter()
-        .map(|c| json!({ "role": c.kebab, "tool": c.tool_id }))
+        .map(|c| {
+            // `experimental` is additive: it signals to agents that a generated
+            // component is an experimental tool.
+            let experimental = registry.get(&c.tool_id).is_some_and(|t| t.experimental);
+            json!({ "role": c.kebab, "tool": c.tool_id, "experimental": experimental })
+        })
         .collect();
     serde_json::Value::Array(items)
 }
@@ -308,13 +381,26 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
     );
 
     for component in components(selection, registry) {
+        let experimental = registry
+            .get(&component.tool_id)
+            .is_some_and(|t| t.experimental);
+        let tag = if experimental {
+            style("  [experimental]").yellow().bold().to_string()
+        } else {
+            String::new()
+        };
         println!(
-            "  {} Scaffolded {} ({})",
+            "  {} Scaffolded {} ({}){}",
             style("✔").green().bold(),
             component.kebab,
-            component.tool_id
+            component.tool_id,
+            tag
         );
     }
+
+    // Reiterate the experimental caveat after generation (a one-shot user may
+    // not have seen the pre-generation summary warning scroll past).
+    print_experimental_warning(selection, registry);
 
     // Check-and-advise: surface any missing required deps before "Next steps".
     print_dep_advice(report);
@@ -573,5 +659,67 @@ mod tests {
     #[test]
     fn first_sentence_ends_with_period() {
         assert_eq!(first_sentence("Ends with period."), "Ends with period.");
+    }
+
+    use crate::registry::types::{Network, RoleAssignment};
+
+    fn selection_with(assignments: Vec<RoleAssignment>) -> Selection {
+        Selection {
+            project_name: "demo".to_string(),
+            assignments,
+            network: Network::Preview,
+            nix: false,
+        }
+    }
+
+    #[test]
+    fn experimental_tag_only_for_experimental_tools() {
+        let reg = Registry::load().unwrap();
+        assert_eq!(
+            experimental_tag(reg.get("blaster").unwrap()),
+            " [experimental]"
+        );
+        assert_eq!(experimental_tag(reg.get("aiken").unwrap()), "");
+    }
+
+    #[test]
+    fn components_json_marks_experimental_component() {
+        let reg = Registry::load().unwrap();
+        let sel = selection_with(vec![
+            RoleAssignment {
+                role: Role::OnChain,
+                tool_id: "aiken".to_string(),
+            },
+            RoleAssignment {
+                role: Role::FormalMethods,
+                tool_id: "blaster".to_string(),
+            },
+        ]);
+        let json = components_json(&sel, &reg);
+        let items = json.as_array().unwrap();
+        let aiken = items.iter().find(|c| c["tool"] == "aiken").unwrap();
+        let blaster = items.iter().find(|c| c["tool"] == "blaster").unwrap();
+        assert_eq!(aiken["experimental"], serde_json::json!(false));
+        assert_eq!(blaster["experimental"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn selected_experimental_tools_dedups_and_filters() {
+        let reg = Registry::load().unwrap();
+        // No experimental tool selected → empty.
+        let none = selection_with(vec![RoleAssignment {
+            role: Role::OnChain,
+            tool_id: "aiken".to_string(),
+        }]);
+        assert!(selected_experimental_tools(&none, &reg).is_empty());
+
+        // Blaster selected → reported once.
+        let some = selection_with(vec![RoleAssignment {
+            role: Role::FormalMethods,
+            tool_id: "blaster".to_string(),
+        }]);
+        let experimental = selected_experimental_tools(&some, &reg);
+        assert_eq!(experimental.len(), 1);
+        assert_eq!(experimental[0].id, "blaster");
     }
 }

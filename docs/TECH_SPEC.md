@@ -41,6 +41,7 @@ cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 | `--formal-methods <TOOL_ID>` | string | At most one. |
 | `--network <preview\|preprod\|mainnet>` | enum | Default `preview`. |
 | `--nix` | bool | Emit `flake.nix` + `.envrc`. |
+| `--allow-experimental` | bool | Opt in to experimental tools (§3.2.1). Required to select one in one-shot/JSON; pre-acknowledges the interactive confirm. |
 | `--dry-run` | bool | Plan only; write nothing; exit 0. |
 
 
@@ -89,6 +90,7 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `fullstack_conflict` | 2 | `{ }` (`--fullstack` combined with `--on-chain`/`--off-chain`) |
 | `fullstack_unsupported` | 2 | `{ tool_id, valid_tools: [..] }` (tool has no `[fullstack]` template; `valid_tools` = fullstack-capable tools) |
 | `no_roles_selected` | 2 | `{ }` |
+| `experimental_not_allowed` | 2 | `{ tools: [..], remedy: "--allow-experimental" }` (an experimental tool was selected in one-shot/JSON without `--allow-experimental`; §3.2.1) |
 | `invalid_network` | 2 | `{ value, expected: ["preview","preprod","mainnet"] }` |
 | `dir_exists` | 1 | `{ path }` (exists and non-empty) |
 | `registry_load` | 1 | `{ file?, detail }` |
@@ -136,6 +138,7 @@ languages    = ["aiken"]       # required, ≥1 — except infra tools, which ma
 system_deps  = ["aiken"]       # required (may be []); abstract dep ids → registry/deps.toml (§9)
 nix_packages = ["aiken"]       # optional (default []); nixpkgs attrs for the dev shell
 nix_self_contained = false     # optional (default false); tool ships its own component flake (§4.1)
+experimental = false           # optional (default false); true = unstable and/or not build-green, gated (§3.2.1)
 
 [roles.on-chain]               # ≥1 [roles.<kebab>] block; key validated against Role
 template = "aiken/on-chain"    # required; path under templates/
@@ -186,7 +189,42 @@ RoleConfig { template }
 EnvMapping { from, to }
 InfraConfig { cardano_up_package, env: Vec<EnvMapping> }
 ToolDef { id, name, description, website, languages, nix_packages, nix_self_contained: bool, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig> }
+ToolDef { id, name, description, website, languages, nix_packages, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig>, experimental: bool }
 ```
+
+#### 3.2.1 Experimental tools
+
+`experimental = true` marks a tool as **not production-ready**, for either — or both — of two
+reasons:
+
+1. the **upstream tool itself** is experimental (pre-release, unstable, a work in progress — e.g.
+   Blaster);
+2. its **cardano-init integration** is not yet build-green (a placeholder template, excluded from the
+   build-green guarantees / smoke matrix).
+
+Either reason is sufficient; the flag does not distinguish them, because the consequence for the user
+is the same (rough edges, breaking changes). The tool still generates (so its role is present and
+demoable). Default `false`, so a production-ready tool needs no flag. Maturity is a **per-tool**
+property, not per-role: a future production-ready formal-methods tool would set `experimental = false`
+even though today's Blaster is `true` (ROADMAP Phase 0 formal-methods deliverable).
+
+Experimental status is both **surfaced and gated**:
+
+- **Surfaced** everywhere: `list`/`--help` add an `[experimental]` tag and a `Status:` line, the
+  interactive picker tags the choice, the web builder shows an "Experimental" badge (and appends
+  `--allow-experimental` to the emitted command), and generation prints a prominent warning (in the
+  pre-generation summary *and* on success). In JSON, `list`'s `tools[].experimental` and each
+  generated `components[].experimental` carry the flag for agents (both additive; no `schema_version`
+  bump).
+- **Gated** by explicit opt-in, so a tool with rough edges is never scaffolded unknowingly. It does
+  **not** gate the tool out of existence — the role still generates for the all-five-roles demo — it
+  gates *unacknowledged* use:
+  - **One-shot / JSON** (non-interactive): selecting an experimental tool without
+    `--allow-experimental` is the usage error `experimental_not_allowed` (§2.5), exit 2 — nothing is
+    generated. A flag, not a prompt, so non-interactive mode stays non-interactive.
+  - **Interactive**: choosing an experimental tool triggers an explicit confirm (default **No**);
+    declining drops just that tool and keeps the rest. `--allow-experimental` pre-acknowledges and
+    skips the confirm.
 
 Load-time validation (`registry/loader.rs`), all fatal:
 - unparseable TOML → `RegistryError::Parse { file }`.
@@ -403,15 +441,15 @@ A component whose `dev` provisions a local endpoint (e.g. Yaci DevKit's devnet) 
   ],
   "tools": [
     { "id": "aiken", "name": "Aiken", "description": "…", "website": "https://…",
-      "languages": ["aiken"], "roles": ["on-chain"], "fullstack": false },
-    { "id": "scalus", "name": "Scalus", "description": "…", "website": "https://…",
-      "languages": ["scala"], "roles": ["off-chain","on-chain"], "fullstack": true }
+      "languages": ["aiken"], "roles": ["on-chain"], "fullstack": false, "experimental": false },
+    { "id": "blaster", "name": "Blaster", "description": "…", "website": "https://…",
+      "languages": ["blaster-spec"], "roles": ["formal-methods"], "fullstack": false, "experimental": true }
     /* … tools sorted by id; each tool's roles sorted … */
   ]
 }}
 ```
 
-Both `list` and `web::build_registry_json` render from one shared model (`registry::view`: `role_views()` / `tool_views()`), so they cannot drift. `roles[].multiple` is `true` only for infrastructure (`Role::multiple`). `tools[].fullstack` is `true` when the tool declares a `[fullstack]` template (i.e. `--fullstack <tool>` is valid); it is an additive field (no `schema_version` bump). `fullstack` is a capability, **not** a role — it never appears in `tools[].roles` or in the `roles` array.
+Both `list` and `web::build_registry_json` render from one shared model (`registry::view`: `role_views()` / `tool_views()`), so they cannot drift. `roles[].multiple` is `true` only for infrastructure (`Role::multiple`). `tools[].fullstack` is `true` when the tool declares a `[fullstack]` template (i.e. `--fullstack <tool>` is valid); it is an additive field (no `schema_version` bump). `fullstack` is a capability, **not** a role — it never appears in `tools[].roles` or in the `roles` array. `tools[].experimental` is `true` for tools that are unstable and/or not yet build-green (§3.2.1); selecting one needs `--allow-experimental` — also additive.
 
 ---
 

@@ -171,6 +171,20 @@ pub struct ToolDef {
     /// Infrastructure config. Required when the tool fills the infrastructure
     /// role (validated at load), `None` otherwise.
     pub infra: Option<InfraConfig>,
+    /// Whether this tool is **experimental** — not production-ready, for either
+    /// (or both) of two reasons:
+    ///   1. the *upstream tool itself* is experimental — pre-release, unstable,
+    ///      a work in progress (e.g. Blaster);
+    ///   2. its *cardano-init integration* is not yet build-green — a placeholder
+    ///      template, excluded from the build-green guarantees / smoke matrix.
+    ///
+    /// It still generates (so the role is present and demoable), but selecting it
+    /// requires explicit opt-in (`--allow-experimental`, or the interactive
+    /// confirm) and is surfaced as "experimental" across every presenter, so it
+    /// is never scaffolded unknowingly. Per-tool, not per-role: a future
+    /// production-ready formal-methods tool would set this `false` even though
+    /// today's Blaster is `true` (ROADMAP Phase 0 formal-methods deliverable).
+    pub experimental: bool,
     /// Unified on-chain + off-chain template. When present (and the tool fills
     /// both roles), assigning this tool to both collapses into a single
     /// `protocol/` component built from this template instead of two folders.

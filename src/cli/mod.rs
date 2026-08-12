@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use crate::registry::loader::{Registry, RegistryError};
-use crate::registry::types::ToolDef;
+use crate::registry::types::{Role, ToolDef};
 use crate::scaffold::ScaffoldError;
 
 // ---------------------------------------------------------------------------
@@ -95,6 +95,12 @@ pub struct InitArgs {
     #[arg(long)]
     pub nix: bool,
 
+    /// Opt in to experimental tools (not yet build-green). Required to select an
+    /// experimental tool in one-shot/JSON mode; pre-acknowledges the interactive
+    /// confirm.
+    #[arg(long)]
+    pub allow_experimental: bool,
+
     /// Show what would be generated without writing to disk
     #[arg(long)]
     pub dry_run: bool,
@@ -133,7 +139,7 @@ pub enum CliError {
     #[error("{0}")]
     Catalog(#[from] crate::doctor::catalog::CatalogError),
 
-    #[error("directory '{}' already exists — refusing to overwrite", path)]
+    #[error("directory '{}' already exists. Refusing to overwrite", path)]
     DirectoryExists { path: String },
 
     #[error("unknown tool '{}' for role {}", tool_id, role)]
@@ -150,8 +156,23 @@ pub enum CliError {
         valid_roles: Vec<String>,
     },
 
-    #[error("no roles selected — at least one role must be provided")]
+    #[error("no roles selected. At least one role must be provided")]
     NoRolesSelected,
+
+    #[error(
+        "{} is experimental — it may be unstable or incomplete, so it's opt-in (expect rough edges and breaking changes).\n\n  To scaffold it anyway, re-run the same command with --allow-experimental, e.g.:\n\n    cardano-init --name <project> {} --allow-experimental",
+        labels.join(", "),
+        example_flags.join(" ")
+    )]
+    ExperimentalNotAllowed {
+        /// Tool ids (machine-facing `context`).
+        tools: Vec<String>,
+        /// Human labels, `Name (id)`, for the message.
+        labels: Vec<String>,
+        /// The role flags that selected the experimental tool(s), e.g.
+        /// `["--formal-methods", "blaster"]`, so the example is copy-pasteable.
+        example_flags: Vec<String>,
+    },
 
     #[error(
         "tool '{}' does not support fullstack (no [fullstack] template)",
@@ -167,7 +188,7 @@ pub enum CliError {
     )]
     FullstackConflict,
 
-    #[error("invalid network '{}' — expected preview, preprod, or mainnet", value)]
+    #[error("invalid network '{}'. Expected preview, preprod, or mainnet", value)]
     InvalidNetwork { value: String },
 
     #[error("invalid project name '{}' — {}", name, reason)]
@@ -195,6 +216,7 @@ impl CliError {
             CliError::UnknownTool { .. }
             | CliError::ToolRoleMismatch { .. }
             | CliError::NoRolesSelected
+            | CliError::ExperimentalNotAllowed { .. }
             | CliError::FullstackUnsupported { .. }
             | CliError::FullstackConflict
             | CliError::InvalidNetwork { .. }
@@ -223,6 +245,7 @@ impl CliError {
             CliError::UnknownTool { .. } => "unknown_tool",
             CliError::ToolRoleMismatch { .. } => "tool_role_mismatch",
             CliError::NoRolesSelected => "no_roles_selected",
+            CliError::ExperimentalNotAllowed { .. } => "experimental_not_allowed",
             CliError::FullstackUnsupported { .. } => "fullstack_unsupported",
             CliError::FullstackConflict => "fullstack_conflict",
             CliError::InvalidNetwork { .. } => "invalid_network",
@@ -264,6 +287,9 @@ impl CliError {
             }
             CliError::InvalidProjectName { name, reason } => {
                 json!({ "name": name, "reason": reason })
+            }
+            CliError::ExperimentalNotAllowed { tools, .. } => {
+                json!({ "tools": tools, "remedy": "--allow-experimental" })
             }
             CliError::NoRolesSelected
             | CliError::FullstackConflict
@@ -315,7 +341,18 @@ pub(super) fn format_tool(out: &mut String, tool: &ToolDef) {
 
     let mut roles: Vec<&str> = tool.roles.keys().map(|r| r.as_kebab()).collect();
     roles.sort();
-    let _ = writeln!(out, "  {} ({})", tool.name, tool.id);
+    let experimental_tag = if tool.experimental {
+        "  [experimental]"
+    } else {
+        ""
+    };
+    let _ = writeln!(out, "  {} ({}){}", tool.name, tool.id, experimental_tag);
+    if tool.experimental {
+        let _ = writeln!(
+            out,
+            "    Status:    experimental — may be unstable or incomplete; needs --allow-experimental"
+        );
+    }
     let _ = writeln!(out, "    Roles:     {}", roles.join(", "));
     let _ = writeln!(out, "    Languages: {}", tool.languages.join(", "));
     let _ = writeln!(out, "    Website:   {}", tool.website);
@@ -419,6 +456,18 @@ fn run_doctor(registry: &Registry, format: Format) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The one-shot flag that assigns a tool to a given role, e.g. `--on-chain`.
+/// Used to build a copy-pasteable example command in error messages.
+fn role_flag(role: Role) -> &'static str {
+    match role {
+        Role::OnChain => "--on-chain",
+        Role::OffChain => "--off-chain",
+        Role::Infrastructure => "--infra",
+        Role::Devnet => "--devnet",
+        Role::FormalMethods => "--formal-methods",
+    }
+}
+
 /// Run the default init mode (interactive or one-shot).
 fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), CliError> {
     // `--name` is required for one-shot flags, and always in JSON mode (which
@@ -435,7 +484,7 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
 
     // Decide mode: one-shot if --name provided, interactive otherwise
     let selection = if let Some(ref name) = args.name {
-        oneshot::build_selection(
+        let selection = oneshot::build_selection(
             name,
             args.on_chain.as_deref(),
             args.off_chain.as_deref(),
@@ -446,9 +495,36 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
             &args.network,
             args.nix,
             registry,
-        )?
+        )?;
+        // Experimental gate (one-shot / JSON): selecting a not-yet-build-green
+        // tool requires explicit opt-in. Non-interactive can't prompt, so this
+        // is a hard usage error unless --allow-experimental was passed.
+        if !args.allow_experimental {
+            let experimental = output::selected_experimental_tools(&selection, registry);
+            if !experimental.is_empty() {
+                let tools: Vec<String> = experimental.iter().map(|t| t.id.clone()).collect();
+                let labels: Vec<String> = experimental
+                    .iter()
+                    .map(|t| format!("{} ({})", t.name, t.id))
+                    .collect();
+                // The exact role flags that pulled in the experimental tool(s),
+                // so the suggested command is copy-pasteable.
+                let example_flags: Vec<String> = selection
+                    .assignments
+                    .iter()
+                    .filter(|a| tools.iter().any(|id| id == &a.tool_id))
+                    .flat_map(|a| [role_flag(a.role).to_string(), a.tool_id.clone()])
+                    .collect();
+                return Err(CliError::ExperimentalNotAllowed {
+                    tools,
+                    labels,
+                    example_flags,
+                });
+            }
+        }
+        selection
     } else {
-        interactive::run_interactive(registry)?
+        interactive::run_interactive(registry, args.allow_experimental)?
     };
 
     let root = PathBuf::from(&selection.project_name);
@@ -596,11 +672,74 @@ mod tests {
             formal_methods: None,
             network: "preview".to_string(),
             nix: false,
+            allow_experimental: false,
             dry_run: true,
         };
         let err = run_init(args, &registry, Format::Json).unwrap_err();
         assert_eq!(err.code(), "fullstack_conflict");
         assert_eq!(err.exit_code(), 2);
+    }
+
+    /// Build InitArgs for a one-shot run with just the fields a test varies.
+    fn init_args(formal_methods: Option<&str>, allow_experimental: bool) -> InitArgs {
+        InitArgs {
+            name: Some("exp-gate-demo".to_string()),
+            on_chain: Some("aiken".to_string()),
+            off_chain: None,
+            fullstack: None,
+            infra: vec![],
+            devnet: None,
+            formal_methods: formal_methods.map(str::to_string),
+            network: "preview".to_string(),
+            nix: false,
+            allow_experimental,
+            dry_run: true,
+        }
+    }
+
+    #[test]
+    fn experimental_tool_gated_without_flag() {
+        // One-shot selecting blaster (experimental) without --allow-experimental
+        // is a usage error before any generation happens.
+        let registry = Registry::load().unwrap();
+        let err = run_init(init_args(Some("blaster"), false), &registry, Format::Json).unwrap_err();
+        assert_eq!(err.code(), "experimental_not_allowed");
+        assert_eq!(err.exit_code(), 2);
+        let ctx = err.context();
+        let tools: Vec<&str> = ctx["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(tools, vec!["blaster"]);
+        assert_eq!(ctx["remedy"], "--allow-experimental");
+
+        // The human message names the tool (name + id) and shows a copy-pasteable
+        // opt-in command with the exact role flag.
+        let msg = err.to_string();
+        assert!(msg.contains("Blaster (blaster)"), "message: {msg}");
+        assert!(
+            msg.contains("--formal-methods blaster --allow-experimental"),
+            "message: {msg}"
+        );
+    }
+
+    #[test]
+    fn experimental_tool_allowed_with_flag() {
+        // With --allow-experimental the same selection passes the gate (dry-run
+        // → Ok, no disk write).
+        let registry = Registry::load().unwrap();
+        let res = run_init(init_args(Some("blaster"), true), &registry, Format::Json);
+        assert!(res.is_ok(), "expected Ok, got {res:?}");
+    }
+
+    #[test]
+    fn non_experimental_selection_needs_no_flag() {
+        // A selection with no experimental tool is unaffected by the gate.
+        let registry = Registry::load().unwrap();
+        let res = run_init(init_args(None, false), &registry, Format::Json);
+        assert!(res.is_ok(), "expected Ok, got {res:?}");
     }
 
     #[test]
