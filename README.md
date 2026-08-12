@@ -119,9 +119,9 @@ Early prototype. Tools currently in the registry (✅ available · ⬜ planned).
 |----------|-----------|--------|----------------|----------------|
 | ✅ Aiken | ✅ MeshJS | ✅ Yaci DevKit | ✅ Kupo | ⬜ Blaster |
 | ✅ Scalus | ✅ Scalus | | ✅ Ogmios | |
-| ✅ Plinth | ⬜ Tx3  | | ✅ Dolos | |
-| ⬜ Pebble | ⬜ Lucid Evolution | | ✅ Tx Submit API | |
-| ⬜ Plutarch | ⬜ Evolution SDK | | ✅ Cardano Node | |
+| ✅ Plinth | ✅ Evolution SDK | | ✅ Dolos | |
+| ⬜ Pebble | ⬜ Tx3 | | ✅ Tx Submit API | |
+| ⬜ Plutarch | ⬜ Lucid Evolution | | ✅ Cardano Node | |
 | ⬜ Opshin | ⬜ Blaze | | ✅ Cardano Node API | |
 | | ⬜ Elm Cardano | | ✅ Dingo | |
 | | ⬜ PyCardano | | | |
