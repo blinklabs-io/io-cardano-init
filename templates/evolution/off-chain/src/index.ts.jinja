@@ -1,0 +1,11 @@
+// Library entry point. Re-exports the framework-agnostic core so the package
+// can be imported from a backend or a frontend:
+//
+//   import { GiftCardContract, getGiftCardValidators } from "{{ project_name }}-off-chain";
+//
+// Node-only helpers (reading configuration from the environment, building an
+// Evolution SDK signing client from a mnemonic) live behind the
+// "{{ project_name }}-off-chain/node" subpath so they never reach a browser
+// bundle. A frontend builds its own client with `Client.make(...).withCip30(...)`
+// and constructs GiftCardContract directly.
+export * from "./contract.js";
