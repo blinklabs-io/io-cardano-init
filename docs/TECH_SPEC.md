@@ -137,6 +137,7 @@ website      = "https://…"     # required
 languages    = ["aiken"]       # required, ≥1 — except infra tools, which may use [] (no user-facing language)
 system_deps  = ["aiken"]       # required (may be []); abstract dep ids → registry/deps.toml (§9)
 nix_packages = ["aiken"]       # optional (default []); nixpkgs attrs for the dev shell
+nix_self_contained = false     # optional (default false); tool ships its own component flake (§4.1)
 experimental = false           # optional (default false); true = unstable and/or not build-green, gated (§3.2.1)
 
 [roles.on-chain]               # ≥1 [roles.<kebab>] block; key validated against Role
@@ -187,6 +188,7 @@ env = [{ from = "KUPO_URL", to = "INDEXER_URL" }]   # cardano-up output → cont
 RoleConfig { template }
 EnvMapping { from, to }
 InfraConfig { cardano_up_package, env: Vec<EnvMapping> }
+ToolDef { id, name, description, website, languages, nix_packages, nix_self_contained: bool, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig> }
 ToolDef { id, name, description, website, languages, nix_packages, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig>, experimental: bool }
 ```
 
@@ -271,11 +273,17 @@ summary = "…"          # shown in interactive mode when this template is highl
 [[files]]
 source = "Justfile.jinja"   # path within the template dir
 dest   = "Justfile"         # path within the role dir (see §4.4)
+
+[[files]]
+source = "flake.nix.jinja"  # optional emission guard:
+dest   = "flake.nix"        # emit only when the condition holds
+when   = "nix"              # (currently the sole condition: `--nix`)
 ```
 
-- Only `source` + `dest` per file. 
+- `source` + `dest` required per file; `when` optional (absent ⇒ always emitted).
 - If file ends with `.jinja`, it's rendered (§4.2). 
 - `_base/` and `_nix/` layers are emitted by the planner directly (not via a manifest).
+- **`when`** gates emission on the selection: `when = "nix"` emits the file only under `--nix`. A tool that ships its own component-local Nix flake this way should also set `nix_self_contained = true`. Then its `nix_packages` are not listed as bare attrs in the top-level shell (a plain `mkShell` cannot build them); instead the top-level flake references the component as a `path:./<dir>` input and composes its dev shell via `inputsFrom`, so the whole toolchain — and `just build` for that component — works from the project root. Plinth uses this to ship the recommended haskell.nix flake from `IntersectMBO/plinth-template`.
 
 ### 4.2 Render derivation (the `.jinja` rule)
 
@@ -331,7 +339,8 @@ struct TemplateContext {
     env_vars: <ordered map>,         // see §6.3; iterated in sorted-key order
 
     nix: bool,
-    nix_packages: Vec<String>,       // deduped union across selected tools, first-seen order
+    nix_packages: Vec<String>,       // deduped union across selected tools, first-seen order; excludes nix_self_contained tools (composed via inputsFrom instead)
+    nix_component_flakes: Vec<String>, // dirs of nix_self_contained components; the top-level flake references each as path:./<dir> and pulls its dev shell in via inputsFrom
 }
 
 struct RoleContext { tool_id, tool_name, language, dir }   // language = tool.languages[0]
@@ -362,7 +371,7 @@ Determinism note: any consumer that emits tools/roles must sort (§11), since `b
 3. **Role layers**: assignments processed in **`Role::ALL` order** (not flag order). For each, read the template manifest and append its files (rendered per §4.2). Two roles aggregate instead of emitting per-assignment:
    - **Fullstack collapses**: when the same tool fills on-chain + off-chain and declares a `[fullstack]` template (§3.4), the two assignments emit **one** `protocol/` component from the `[fullstack]` template, emitted **once** on the first of the pair (on-chain sorts first in `Role::ALL`), the off-chain assignment is skipped. `has_on_chain`/`has_off_chain` are false; `has_fullstack` is true. Because both assignments remain in the selection, the blueprint predicate (§6.2) is unchanged.
    - **Infrastructure aggregates**: all selected infra tools share one driver template (`_infra/cardano-up`), emitted **once** at `infra/` on the first infra assignment (the rest are contiguous after the canonical sort and skipped); they are still sorted by `tool_id` for the rendered `infra_tools`/`infra_env` order (§11). All infra tools must resolve to the same template path, else `ScaffoldError::InfraTemplateMismatch`.
-4. **Optional layer**: if `nix`, `flake.nix` (rendered) + `.envrc` (`Inline "use flake\n"`).
+4. **Optional layer**: if `nix`, `flake.nix` (rendered) + `.envrc` (rendered from `_nix/envrc.jinja`; `use flake`, plus — when the top-level flake composes a `nix_self_contained` component — a `NIX_CONFIG` pre-accept for its `nixConfig` and a source-build heads-up when the IOG cache isn't trusted).
 
 `--dry-run` returns this `FilePlan` (no rendering, no I/O).
 

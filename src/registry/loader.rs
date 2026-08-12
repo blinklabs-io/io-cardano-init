@@ -92,6 +92,8 @@ struct ToolMetaToml {
     #[serde(default)]
     nix_packages: Vec<String>,
     #[serde(default)]
+    nix_self_contained: bool,
+    #[serde(default)]
     detect: Vec<DetectToml>,
     #[serde(default)]
     experimental: bool,
@@ -189,6 +191,7 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
         languages: raw.tool.languages,
         system_deps: raw.tool.system_deps,
         nix_packages: raw.tool.nix_packages,
+        nix_self_contained: raw.tool.nix_self_contained,
         detect: raw
             .tool
             .detect
@@ -299,9 +302,9 @@ mod tests {
 
     #[test]
     fn load_tool_count() {
-        // aiken, scalus, meshjs, yaci, blaster + infra: kupo, ogmios, dolos,
-        // tx-submit-api, cardano-node, cardano-node-api, dingo
-        assert_eq!(registry().all_tools().len(), 12);
+        // aiken, plinth, scalus, meshjs, yaci, blaster + infra: kupo, ogmios,
+        // dolos, tx-submit-api, cardano-node, cardano-node-api, dingo
+        assert_eq!(registry().all_tools().len(), 13);
     }
 
     #[test]
@@ -323,7 +326,7 @@ mod tests {
         let on_chain = reg.tools_for_role(Role::OnChain);
         let mut ids: Vec<&str> = on_chain.iter().map(|t| t.id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, vec!["aiken", "scalus"]);
+        assert_eq!(ids, vec!["aiken", "plinth", "scalus"]);
     }
 
     #[test]

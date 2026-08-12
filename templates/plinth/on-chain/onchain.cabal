@@ -1,0 +1,85 @@
+cabal-version:   3.0
+name:            onchain
+version:         0.1.0.0
+license:
+build-type:      Simple
+
+-- These options are supported by GHC and Plinth
+common ghc-options
+  ghc-options:        -Wall
+  default-language:   Haskell2010
+  default-extensions:
+    DataKinds
+    DeriveAnyClass
+    DeriveGeneric
+    DerivingStrategies
+    FlexibleContexts
+    FlexibleInstances
+    GeneralizedNewtypeDeriving
+    ImportQualifiedPost
+    LambdaCase
+    MultiParamTypeClasses
+    NumericUnderscores
+    OverloadedStrings
+    PatternSynonyms
+    RecordWildCards
+    ScopedTypeVariables
+    StandaloneDeriving
+    Strict
+    TemplateHaskell
+    TypeApplications
+    UndecidableInstances
+    ViewPatterns
+
+-- These options are only for GHC builds (not supported by Plinth)
+common ghc-only-options
+  import:             ghc-options
+  default-extensions: GADTs
+
+-- These options are required for Plinth builds
+common plinth-options
+  import:      ghc-options
+  ghc-options:
+    -fobject-code -fno-full-laziness -fno-ignore-interface-pragmas
+    -fno-omit-interface-pragmas -fno-spec-constr -fno-specialise
+    -fno-strictness -fno-unbox-small-strict-fields
+    -fno-unbox-strict-fields -fplugin-opt
+    PlutusTx.Plugin:target-version=1.1.0
+
+common plutus-deps
+  build-depends:
+    , plutus-core        ^>=1.66.0.0
+    , plutus-ledger-api  ^>=1.66.0.0
+    , plutus-tx          ^>=1.66.0.0
+    , plutus-tx-plugin   ^>=1.66.0.0
+
+library
+  import:          plinth-options, plutus-deps
+  hs-source-dirs:  src
+  build-depends:   base
+  exposed-modules:
+    GiftCardMintingPolicy
+    RedeemValidator
+
+-- Serialises the compiled validators into a single CIP-57 blueprint.
+executable gen-blueprint
+  import:         ghc-only-options, plutus-deps
+  hs-source-dirs: app
+  main-is:        GenBlueprint.hs
+  build-depends:
+    , base
+    , bytestring
+    , containers
+    , onchain
+
+-- Smoke test: forces the plugin to compile both validators to Plutus Core and
+-- checks the serialised scripts are non-empty.
+test-suite onchain-test
+  import:         ghc-only-options, plutus-deps
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Spec.hs
+  build-depends:
+    , base
+    , bytestring
+    , onchain

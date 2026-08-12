@@ -1,0 +1,77 @@
+[manifest]
+summary = "Plinth on-chain project: the GiftCard example in Haskell (a one-shot minting policy + redeem spending validator) compiled to Plutus Core, writing a combined CIP-57 blueprint to ../blueprint/plutus.json"
+
+[[files]]
+source = "Justfile.jinja"
+dest = "Justfile"
+
+[[files]]
+source = "onchain.cabal"
+dest = "onchain.cabal"
+
+[[files]]
+source = "cabal.project"
+dest = "cabal.project"
+
+[[files]]
+source = ".gitignore"
+dest = ".gitignore"
+
+[[files]]
+source = "src/GiftCardMintingPolicy.hs"
+dest = "src/GiftCardMintingPolicy.hs"
+
+[[files]]
+source = "src/RedeemValidator.hs"
+dest = "src/RedeemValidator.hs"
+
+[[files]]
+source = "app/GenBlueprint.hs.jinja"
+dest = "app/GenBlueprint.hs"
+
+[[files]]
+source = "test/Spec.hs"
+dest = "test/Spec.hs"
+
+# Nix layer — the recommended haskell.nix dev shell, mirroring the official
+# IntersectMBO/plinth-template. Emitted only under `--nix`; a plain nixpkgs
+# shell cannot build Plinth's CHaP/Plutus dependencies, so this component
+# ships its own flake instead of joining the top-level aggregated shell.
+[[files]]
+source = "flake.nix.jinja"
+dest = "flake.nix"
+when = "nix"
+
+# The committed lock pins haskell.nix + nixpkgs + CHaP + hackage to a
+# mutually-consistent, tested set (matching cabal.project's index-state).
+# Without it the flake resolves haskell.nix at HEAD, which is frequently
+# broken. Vendored verbatim from IntersectMBO/plinth-template.
+[[files]]
+source = "flake.lock"
+dest = "flake.lock"
+when = "nix"
+
+[[files]]
+source = "nix/outputs.nix"
+dest = "nix/outputs.nix"
+when = "nix"
+
+[[files]]
+source = "nix/pkgs.nix"
+dest = "nix/pkgs.nix"
+when = "nix"
+
+[[files]]
+source = "nix/project.nix.jinja"
+dest = "nix/project.nix"
+when = "nix"
+
+[[files]]
+source = "nix/shell.nix"
+dest = "nix/shell.nix"
+when = "nix"
+
+[[files]]
+source = "nix/utils.nix"
+dest = "nix/utils.nix"
+when = "nix"

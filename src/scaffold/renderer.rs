@@ -300,6 +300,32 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_plinth_nix() {
+        // Plinth on-chain with `--nix`: locks the component-local haskell.nix
+        // flake (mirroring IntersectMBO/plinth-template) and confirms Plinth's
+        // packages stay out of the aggregated top-level shell.
+        assert_snapshot(
+            "plinth_nix",
+            &sel(vec![a(Role::OnChain, "plinth")], Network::Preview, true),
+        );
+    }
+
+    #[test]
+    fn snapshot_plinth_meshjs_nix() {
+        // Plinth on-chain + MeshJS off-chain under `--nix`: the top-level flake
+        // composes the on-chain haskell.nix shell via `inputsFrom` *and* still
+        // lists MeshJS's plain nixpkgs package (nodejs) — the two coexist.
+        assert_snapshot(
+            "plinth_meshjs_nix",
+            &sel(
+                vec![a(Role::OnChain, "plinth"), a(Role::OffChain, "meshjs")],
+                Network::Preview,
+                true,
+            ),
+        );
+    }
+
+    #[test]
     fn snapshot_aiken_meshjs_nix() {
         assert_snapshot(
             "aiken_meshjs_nix",

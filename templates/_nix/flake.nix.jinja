@@ -4,9 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+{%- for dir in nix_component_flakes %}
+    "{{ dir }}".url = "path:./{{ dir }}";
+{%- endfor %}
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils{% if nix_component_flakes %}, ... }@inputs{% else %} }{% endif %}:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -14,7 +17,16 @@
       {
         devShells.default = pkgs.mkShell {
           name = "{{ project_name }}";
-
+{% if nix_component_flakes %}
+          # Compose the dev shells of components that ship their own flake (e.g.
+          # the Plinth on-chain haskell.nix shell) so their full toolchain — and
+          # `just build` for them — works from the project root.
+          inputsFrom = [
+{%- for dir in nix_component_flakes %}
+            inputs."{{ dir }}".devShells.${system}.default
+{%- endfor %}
+          ];
+{% endif %}
           buildInputs = with pkgs; [
             just
 {%- for pkg in nix_packages %}
@@ -28,4 +40,22 @@
           '';
         };
       });
+{%- if nix_component_flakes %}
+
+  # A composed component uses haskell.nix (IOG's Cardano toolchain), which is
+  # served prebuilt from these caches. Without them the shell builds GHC and the
+  # Plutus stack from source. `accept-flake-config` lets direnv/nix use them.
+  nixConfig = {
+    extra-substituters = [
+      "https://cache.iog.io"
+      "https://cache.zw3rk.com"
+    ];
+    extra-trusted-public-keys = [
+      "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ="
+      "loony-tools:pr9m4BkM/5/eSTZlkQyRt57Jz7OMBxNSUiMC4FkcNfk="
+    ];
+    allow-import-from-derivation = true;
+    accept-flake-config = true;
+  };
+{%- endif %}
 }
