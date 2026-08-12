@@ -178,6 +178,8 @@ on-chain↔off-chain link between its two halves.
 - **The component that provisions a local chain endpoint** writes the standard connection vars to `../.env` during its `dev`. This is **role-agnostic** — usually an *infrastructure* service, but a local devnet such as Yaci DevKit in the *devnet* role does it too. Role = a tool's *purpose*; writing `.env` = the orthogonal *capability* of exposing a local endpoint. Consumers react to the presence of `INDEXER_URL`, never to which role set it (principle 1).
 - **Off-chain / devnet / formal-methods** read the blueprint and `.env` if present, and degrade gracefully when absent.
 
+Layered on top of that mechanical seam is a **shared worked example**: every on-chain and off-chain template implements the same **gift card** (a one-shot minting policy plus a `redeem` spending validator) with a common parameter/redeemer ABI. The mechanical contract makes tools *pluggable*; the shared example makes a mixed pair actually *work end-to-end* — the off-chain template parameterizes the compiled validators straight from the blueprint, so e.g. the Scalus off-chain drives an Aiken contract, and MeshJS drives a Scalus one. See ADDING_A_TOOL.md ("The reference example: Gift Card") for the exact ABI a new tool must match.
+
 The `blueprint/` **directory** is scaffolded whenever any blueprint-producing-or-consuming
 role is present, every project except infrastructure-only (§6.2), so the canonical
 path exists wherever it's meaningful; the `plutus.json` **file** within it may still be
