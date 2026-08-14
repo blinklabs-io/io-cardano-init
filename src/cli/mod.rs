@@ -104,6 +104,12 @@ pub struct InitArgs {
     /// Show what would be generated without writing to disk
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Scaffold a combination the compatibility check flags as incompatible
+    /// (e.g. an off-chain tool and a devnet that can't talk). Downgrades the
+    /// stop-generation error to a warning.
+    #[arg(long)]
+    pub ignore_warning: bool,
 }
 
 impl InitArgs {
@@ -188,6 +194,10 @@ pub enum CliError {
     )]
     FullstackConflict,
 
+    // Boxed to keep `CliError` small (this payload carries several strings).
+    #[error("{0}")]
+    IncompatibleTools(Box<IncompatibleToolsError>),
+
     #[error("invalid network '{}'. Expected preview, preprod, or mainnet", value)]
     InvalidNetwork { value: String },
 
@@ -206,6 +216,37 @@ pub enum CliError {
     Prompt(#[from] dialoguer::Error),
 }
 
+/// Payload for [`CliError::IncompatibleTools`] — boxed in the variant so
+/// `CliError` stays small (an off-chain ↔ provider mismatch carries several
+/// strings for both the human message and the JSON context).
+#[derive(Debug)]
+pub struct IncompatibleToolsError {
+    /// Human label `Name (id)` for the off-chain tool.
+    pub off_chain: String,
+    /// Human labels `Name (id)` for the offending provider(s), comma-joined.
+    pub providers: String,
+    /// Why the pair can't talk (seam mismatch / self-hosting).
+    pub reason: String,
+    /// Pre-formatted multi-line remedy (which providers / off-chain tools fit).
+    pub help: String,
+    /// Machine-facing ids `[off_chain_id, provider_ids…]` (JSON context).
+    pub ids: Vec<String>,
+    /// Provider ids compatible with the chosen off-chain tool (JSON context).
+    pub compatible_providers: Vec<String>,
+    /// Off-chain ids compatible with the chosen providers (JSON context).
+    pub compatible_off_chain: Vec<String>,
+}
+
+impl std::fmt::Display for IncompatibleToolsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} can't be paired with {} — {}.\n\n{}\n\n  To scaffold this combination anyway, re-run with --ignore-warning.",
+            self.off_chain, self.providers, self.reason, self.help
+        )
+    }
+}
+
 impl CliError {
     /// Process exit-code category (TECH_SPEC §2.3):
     /// - `2` — usage / validation errors (bad or missing input);
@@ -219,6 +260,7 @@ impl CliError {
             | CliError::ExperimentalNotAllowed { .. }
             | CliError::FullstackUnsupported { .. }
             | CliError::FullstackConflict
+            | CliError::IncompatibleTools(_)
             | CliError::InvalidNetwork { .. }
             | CliError::InvalidProjectName { .. }
             | CliError::NameRequired => 2,
@@ -248,6 +290,7 @@ impl CliError {
             CliError::ExperimentalNotAllowed { .. } => "experimental_not_allowed",
             CliError::FullstackUnsupported { .. } => "fullstack_unsupported",
             CliError::FullstackConflict => "fullstack_conflict",
+            CliError::IncompatibleTools(_) => "incompatible_tools",
             CliError::InvalidNetwork { .. } => "invalid_network",
             CliError::InvalidProjectName { .. } => "invalid_project_name",
             CliError::NameRequired => "name_required",
@@ -291,6 +334,13 @@ impl CliError {
             CliError::ExperimentalNotAllowed { tools, .. } => {
                 json!({ "tools": tools, "remedy": "--allow-experimental" })
             }
+            CliError::IncompatibleTools(e) => json!({
+                "tools": e.ids,
+                "reason": e.reason,
+                "compatible_providers": e.compatible_providers,
+                "compatible_off_chain": e.compatible_off_chain,
+                "remedy": "--ignore-warning",
+            }),
             CliError::NoRolesSelected
             | CliError::FullstackConflict
             | CliError::NameRequired
@@ -439,6 +489,59 @@ fn required_deps<'a>(tool_ids: impl Iterator<Item = &'a str>, registry: &Registr
     deps
 }
 
+/// Turn a detected [`Incompatibility`](crate::registry::compat::Incompatibility)
+/// into a stop-generation `CliError`, pre-formatting the "which tools do fit"
+/// remedy (with the self-hosting case — no compatible provider — phrased as
+/// "omit the provider").
+fn incompatible_tools_error(inc: crate::registry::compat::Incompatibility) -> CliError {
+    let provider_labels: Vec<String> = inc
+        .providers
+        .iter()
+        .map(|p| format!("{} ({})", p.name, p.id))
+        .collect();
+    let providers_text = provider_labels.join(", ");
+
+    let providers_line = if !inc.compatible_providers.is_empty() {
+        format!(
+            "  Providers that work with {}: {}",
+            inc.off_chain_name,
+            inc.compatible_providers.join(", ")
+        )
+    } else if inc.self_hosted {
+        format!(
+            "  {} provides its own devnet — omit the provider selection.",
+            inc.off_chain_name
+        )
+    } else {
+        format!(
+            "  No bundled provider serves {} — point it at a public provider (see its README).",
+            inc.off_chain_name
+        )
+    };
+    let off_chain_line = if inc.compatible_off_chain.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n  Off-chain tools that work with {}: {}",
+            providers_text,
+            inc.compatible_off_chain.join(", ")
+        )
+    };
+
+    let mut ids = vec![inc.off_chain_id.clone()];
+    ids.extend(inc.providers.iter().map(|p| p.id.clone()));
+
+    CliError::IncompatibleTools(Box::new(IncompatibleToolsError {
+        off_chain: format!("{} ({})", inc.off_chain_name, inc.off_chain_id),
+        providers: providers_text,
+        reason: inc.reason,
+        help: format!("{providers_line}{off_chain_line}"),
+        ids,
+        compatible_providers: inc.compatible_providers,
+        compatible_off_chain: inc.compatible_off_chain,
+    }))
+}
+
 /// Run the standalone `doctor`: scan the current directory for generated
 /// components, then report dependency status + install plans.
 fn run_doctor(registry: &Registry, format: Format) -> Result<(), CliError> {
@@ -524,8 +627,21 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
         }
         selection
     } else {
-        interactive::run_interactive(registry, args.allow_experimental)?
+        interactive::run_interactive(registry, args.allow_experimental, args.ignore_warning)?
     };
+
+    // Off-chain ↔ devnet compatibility gate. Interactive mode already filters
+    // incompatible options at selection time, so this primarily guards one-shot;
+    // with --ignore-warning it degrades to a warning and proceeds anyway.
+    if let Some(inc) = crate::registry::compat::check(&selection.assignments, registry) {
+        if args.ignore_warning {
+            if format == Format::Human {
+                output::print_incompatibility_warning(&inc);
+            }
+        } else {
+            return Err(incompatible_tools_error(inc));
+        }
+    }
 
     let root = PathBuf::from(&selection.project_name);
 
@@ -674,6 +790,7 @@ mod tests {
             nix: false,
             allow_experimental: false,
             dry_run: true,
+            ignore_warning: false,
         };
         let err = run_init(args, &registry, Format::Json).unwrap_err();
         assert_eq!(err.code(), "fullstack_conflict");
@@ -694,6 +811,7 @@ mod tests {
             nix: false,
             allow_experimental,
             dry_run: true,
+            ignore_warning: false,
         }
     }
 
@@ -739,6 +857,53 @@ mod tests {
         // A selection with no experimental tool is unaffected by the gate.
         let registry = Registry::load().unwrap();
         let res = run_init(init_args(None, false), &registry, Format::Json);
+        assert!(res.is_ok(), "expected Ok, got {res:?}");
+    }
+
+    /// InitArgs for a one-shot off-chain + infra run whose seams don't overlap
+    /// (Evolution speaks Blockfrost/Kupmios; Dolos serves only UTxORPC).
+    /// `ignore_warning` toggles the compat gate.
+    fn incompatible_provider_args(ignore_warning: bool) -> InitArgs {
+        InitArgs {
+            name: Some("compat-demo".to_string()),
+            on_chain: None,
+            off_chain: Some("evolution".to_string()),
+            fullstack: None,
+            infra: vec!["dolos".to_string()],
+            devnet: None,
+            formal_methods: None,
+            network: "preview".to_string(),
+            nix: false,
+            allow_experimental: false,
+            dry_run: true,
+            ignore_warning,
+        }
+    }
+
+    #[test]
+    fn incompatible_offchain_provider_is_gated() {
+        // Evolution (Blockfrost/Kupmios) + Dolos (UTxORPC) share no seam, so
+        // generation stops before any disk write.
+        let registry = Registry::load().unwrap();
+        let err = run_init(incompatible_provider_args(false), &registry, Format::Json).unwrap_err();
+        assert_eq!(err.code(), "incompatible_tools");
+        assert_eq!(err.exit_code(), 2);
+        let ctx = err.context();
+        assert_eq!(ctx["remedy"], "--ignore-warning");
+        let tools: Vec<&str> = ctx["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(tools, vec!["evolution", "dolos"]);
+    }
+
+    #[test]
+    fn incompatible_offchain_provider_allowed_with_ignore_warning() {
+        // --ignore-warning downgrades the stop to a warning and proceeds.
+        let registry = Registry::load().unwrap();
+        let res = run_init(incompatible_provider_args(true), &registry, Format::Json);
         assert!(res.is_ok(), "expected Ok, got {res:?}");
     }
 

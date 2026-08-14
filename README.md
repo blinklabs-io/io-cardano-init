@@ -111,6 +111,8 @@ Every on-chain and off-chain template ships the **same worked example — a gift
 
 **Fullstack tools.** Some tools (e.g. Scalus) implement both on-chain and off-chain in one language. Pick such a tool for both roles (e.g., `--fullstack scalus`, or `--on-chain scalus --off-chain scalus`) and instead of two folders you get a single unified **`protocol/`** component. It still writes the standard `blueprint/plutus.json` and reads `.env`, so it composes with devnet, formal-methods, and infrastructure.
 
+**Compatibility checks.** Not every off-chain tool can talk to every provider: each speaks a *seam* (wire protocol — Blockfrost, UTxORPC, Ogmios, Kupo) and each devnet/infra provider serves some set of them. `cardano-init` knows these and **stops before generating** a project whose off-chain tool can't reach a chain from its selected providers — e.g. `--off-chain evolution --infra dolos` (Evolution speaks Blockfrost/Kupmios; Dolos serves only UTxORPC). The error lists the providers that *would* work; pass `--ignore-warning` to scaffold the combination anyway. Interactive mode simply hides the incompatible options.
+
 ## Status
 
 Early prototype. Tools currently in the registry (✅ available · ⬜ planned). Infrastructure is multi-tool and provisioned via `cardano-up`; every other role takes one tool.

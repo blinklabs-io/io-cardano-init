@@ -150,6 +150,31 @@ fn print_experimental_warning(selection: &Selection, registry: &Registry) {
     );
 }
 
+/// Warn that an incompatible off-chain ↔ provider pairing is being scaffolded
+/// anyway (the user passed `--ignore-warning`). The hard stop is the default;
+/// this is the reminder that fires once the combination is forced through.
+pub fn print_incompatibility_warning(inc: &crate::registry::compat::Incompatibility) {
+    let providers = inc
+        .providers
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!();
+    println!(
+        "  {} {} + {}",
+        style("⚠ Incompatible (ignored):").yellow().bold(),
+        style(&inc.off_chain_name).yellow().bold(),
+        style(providers).yellow().bold(),
+    );
+    println!("    {}", style(&inc.reason).yellow());
+    println!(
+        "    {}",
+        style("Scaffolding anyway (--ignore-warning); the generated project may not run as-is.")
+            .yellow()
+    );
+}
+
 /// Print a summary of the selection before generation.
 pub fn print_summary(selection: &Selection, registry: &Registry) {
     println!();

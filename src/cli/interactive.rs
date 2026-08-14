@@ -17,6 +17,7 @@ use crate::registry::types::{Network, Role, RoleAssignment, Selection};
 pub fn run_interactive(
     registry: &Registry,
     allow_experimental: bool,
+    ignore_warning: bool,
 ) -> Result<Selection, CliError> {
     let theme = ColorfulTheme::default();
 
@@ -27,7 +28,7 @@ pub fn run_interactive(
     // separate role-picking step: skipping a role is choosing "(skip)" for it.
     // Choosing the same fullstack-capable tool for both on-chain and off-chain
     // collapses into a single `protocol/` component automatically (planner).
-    let mut assignments = select_tools(&theme, registry)?;
+    let mut assignments = select_tools(&theme, registry, ignore_warning)?;
     if assignments.is_empty() {
         return Err(CliError::NoRolesSelected);
     }
@@ -81,6 +82,7 @@ pub fn run_interactive(
 fn select_tools(
     theme: &ColorfulTheme,
     registry: &Registry,
+    ignore_warning: bool,
 ) -> Result<Vec<RoleAssignment>, CliError> {
     let mut assignments = Vec::new();
 
@@ -117,32 +119,89 @@ fn select_tools(
                 });
             }
         } else {
+            // A tool may be unavailable given earlier picks (e.g. a devnet that
+            // can't talk to the already-chosen off-chain tool). Compute the
+            // reason per tool so we can show it as clearly non-selectable —
+            // unless --ignore-warning lets the user pick it anyway.
+            let disabled: Vec<Option<String>> = tools
+                .iter()
+                .map(|t| disabled_reason(role, t, &assignments, registry, ignore_warning))
+                .collect();
+
             // Leading "(skip)" is the default; real tools follow at index 1..
             let mut items = vec!["(skip)".to_string()];
-            items.extend(tools.iter().map(|t| {
-                format!(
+            items.extend(tools.iter().enumerate().map(|(i, t)| {
+                let base = format!(
                     "{}{} — {}",
                     t.name,
                     output::experimental_tag(t),
                     output::first_sentence(&t.description)
-                )
+                );
+                match &disabled[i] {
+                    Some(reason) => format!("{base}  ✗ unavailable — {reason}"),
+                    None => base,
+                }
             }));
-            let idx = Select::with_theme(theme)
-                .with_prompt(format!("Choose a tool for {}:", role))
-                .items(&items)
-                .default(0)
-                .interact()?;
 
-            if idx > 0 {
+            // Re-prompt if a disabled tool is chosen: an unavailable option is
+            // shown (with its reason) but not selectable.
+            loop {
+                let idx = Select::with_theme(theme)
+                    .with_prompt(format!("Choose a tool for {}:", role))
+                    .items(&items)
+                    .default(0)
+                    .interact()?;
+
+                if idx == 0 {
+                    break; // (skip)
+                }
+                if let Some(reason) = &disabled[idx - 1] {
+                    println!(
+                        "  {}",
+                        style(format!(
+                            "{} can't be selected here — {reason}",
+                            tools[idx - 1].name
+                        ))
+                        .yellow()
+                    );
+                    continue;
+                }
                 assignments.push(RoleAssignment {
                     role,
                     tool_id: tools[idx - 1].id.clone(),
                 });
+                break;
             }
         }
     }
 
     Ok(assignments)
+}
+
+/// Why `candidate` can't be selected for `role` given the tools already chosen,
+/// or `None` if it's selectable. The cross-role constraint is off-chain <->
+/// provider seam compatibility; we apply it to the devnet prompt (infra is
+/// multi-select with union semantics — an individual pick isn't sound to
+/// disable, so the run-level gate covers it). `--ignore-warning` clears it (the
+/// option stays selectable, and the run-level gate downgrades to a warning).
+fn disabled_reason(
+    role: Role,
+    candidate: &crate::registry::types::ToolDef,
+    chosen: &[RoleAssignment],
+    registry: &Registry,
+    ignore_warning: bool,
+) -> Option<String> {
+    if ignore_warning || role != Role::Devnet {
+        return None;
+    }
+    // Would choosing this devnet (on top of the off-chain + infra already
+    // picked) make the selection incompatible?
+    let mut hypothetical = chosen.to_vec();
+    hypothetical.push(RoleAssignment {
+        role,
+        tool_id: candidate.id.clone(),
+    });
+    crate::registry::compat::check(&hypothetical, registry).map(|inc| inc.reason)
 }
 
 /// Gate experimental tools behind an explicit confirm (default No). Returns the

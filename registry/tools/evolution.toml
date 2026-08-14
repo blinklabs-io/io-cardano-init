@@ -17,3 +17,9 @@ detect = [{ file = "package.json", contains = "@evolution-sdk" }]
 
 [roles.off-chain]
 template = "evolution/off-chain"
+
+# Evolution SDK connects through its Blockfrost or Kupmios (Kupo + Ogmios)
+# providers. It has no UTxORPC provider yet, so it cannot use a UTxORPC/TRP-only
+# provider such as Dolos.
+[compat]
+consumes = ["blockfrost", "kupo", "ogmios"]

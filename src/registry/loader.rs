@@ -4,7 +4,8 @@ use rust_embed::RustEmbed;
 use serde::Deserialize;
 
 use super::types::{
-    DetectSignature, EnvMapping, InfraConfig, Role, RoleConfig, ToolDef, UnknownRoleError,
+    CompatConfig, DetectSignature, EnvMapping, InfraConfig, Role, RoleConfig, Seam, ToolDef,
+    UnknownRoleError, UnknownSeamError,
 };
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,13 @@ pub enum RegistryError {
         file: String,
         role: String,
         source: UnknownRoleError,
+    },
+
+    #[error("unknown seam '{seam}' in tool file '{file}': {source}")]
+    UnknownSeam {
+        file: String,
+        seam: String,
+        source: UnknownSeamError,
     },
 
     #[error("duplicate tool id '{id}'")]
@@ -65,6 +73,18 @@ struct ToolFileToml {
     infra: Option<InfraToml>,
     #[serde(default)]
     fullstack: Option<RoleConfigToml>,
+    #[serde(default)]
+    compat: Option<CompatToml>,
+}
+
+#[derive(Deserialize)]
+struct CompatToml {
+    #[serde(default)]
+    consumes: Vec<String>,
+    #[serde(default)]
+    serves: Vec<String>,
+    #[serde(default)]
+    self_contained_devnet: bool,
 }
 
 #[derive(Deserialize)]
@@ -183,6 +203,15 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
         template: f.template,
     });
 
+    let compat = match raw.compat {
+        Some(c) => CompatConfig {
+            consumes: parse_seams(file_name, &c.consumes)?,
+            serves: parse_seams(file_name, &c.serves)?,
+            self_contained_devnet: c.self_contained_devnet,
+        },
+        None => CompatConfig::default(),
+    };
+
     Ok(ToolDef {
         id: raw.tool.id,
         name: raw.tool.name,
@@ -202,7 +231,22 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
         infra,
         fullstack,
         experimental: raw.tool.experimental,
+        compat,
     })
+}
+
+/// Parse a list of kebab-case seam strings, surfacing an unknown value as a
+/// registry load error (like an unknown role) rather than silently dropping it.
+fn parse_seams(file_name: &str, raw: &[String]) -> Result<Vec<Seam>, RegistryError> {
+    raw.iter()
+        .map(|s| {
+            Seam::from_kebab(s).map_err(|e| RegistryError::UnknownSeam {
+                file: file_name.to_string(),
+                seam: s.clone(),
+                source: e,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

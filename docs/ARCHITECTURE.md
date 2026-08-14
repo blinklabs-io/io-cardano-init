@@ -41,8 +41,9 @@ cardano-init/
 │   │
 │   ├── registry/               # Pure: tool + role definitions from embedded TOML
 │   │   ├── mod.rs
-│   │   ├── types.rs            # Role, ToolDef, RoleConfig, Selection, Network, …
-│   │   └── loader.rs           # rust-embed → Registry (indexed by id and by role)
+│   │   ├── types.rs            # Role, ToolDef, RoleConfig, Selection, Network, Seam, …
+│   │   ├── loader.rs           # rust-embed → Registry (indexed by id and by role)
+│   │   └── compat.rs           # off-chain ↔ provider (devnet+infra) seam compatibility
 │   │
 │   ├── scaffold/               # Pure: project generation pipeline
 │   │   ├── mod.rs              # Orchestrator (scaffold / dry_run) + embedded templates

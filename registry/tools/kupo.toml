@@ -19,3 +19,7 @@ template = "_infra/cardano-up"
 [infra]
 cardano_up_package = "kupo"
 env = [{ from = "KUPO_URL", to = "INDEXER_URL" }]
+
+# Kupo serves its HTTP index — half of a Kupmios (Kupo + Ogmios) provider.
+[compat]
+serves = ["kupo"]
