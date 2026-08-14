@@ -42,6 +42,7 @@ cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 | `--network <preview\|preprod\|mainnet>` | enum | Default `preview`. |
 | `--nix` | bool | Emit `flake.nix` + `.envrc`. |
 | `--allow-experimental` | bool | Opt in to experimental tools (§3.2.1). Required to select one in one-shot/JSON; pre-acknowledges the interactive confirm. |
+| `--ignore-warning` | bool | Scaffold an off-chain ↔ provider combination the compatibility gate flags as incompatible (§3.2.2). Downgrades the stop to a warning. |
 | `--dry-run` | bool | Plan only; write nothing; exit 0. |
 
 
@@ -91,6 +92,7 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `fullstack_unsupported` | 2 | `{ tool_id, valid_tools: [..] }` (tool has no `[fullstack]` template; `valid_tools` = fullstack-capable tools) |
 | `no_roles_selected` | 2 | `{ }` |
 | `experimental_not_allowed` | 2 | `{ tools: [..], remedy: "--allow-experimental" }` (an experimental tool was selected in one-shot/JSON without `--allow-experimental`; §3.2.1) |
+| `incompatible_tools` | 2 | `{ tools: [off_chain_id, provider_ids…], reason, compatible_providers: [..], compatible_off_chain: [..], remedy: "--ignore-warning" }` (the off-chain tool and its selected providers share no seam; §3.2.2) |
 | `invalid_network` | 2 | `{ value, expected: ["preview","preprod","mainnet"] }` |
 | `dir_exists` | 1 | `{ path }` (exists and non-empty) |
 | `registry_load` | 1 | `{ file?, detail }` |
@@ -182,14 +184,28 @@ cardano_up_package = "kupo"           # package id passed to `cardano-up install
 env = [{ from = "KUPO_URL", to = "INDEXER_URL" }]   # cardano-up output → contract .env key
 ```
 
+A tool may also declare an optional **`[compat]`** table describing the connection *seam(s)* it
+speaks or serves, driving the off-chain ↔ provider compatibility gate (§3.2.2). All fields default
+empty/false, so a tool without `[compat]` imposes no constraint.
+
+```toml
+[compat]
+consumes = ["blockfrost", "kupo", "ogmios"]   # off-chain: seam(s) it can consume (e.g. Evolution)
+serves   = ["blockfrost"]                      # devnet/infra: seam(s) it exposes (e.g. Yaci, Dingo)
+self_contained_devnet = true                   # bundles its own devnet → needs no devnet role (e.g. Tx3)
+```
+
+Seam vocabulary (`Seam` enum, closed like `Role`; unknown value → `RegistryError::UnknownSeam` at
+load): `blockfrost`, `u5c`, `trp`, `ogmios`, `kupo`.
+
 `system_deps` is **per-tool, flat** (§9.1): it applies whenever the tool is selected for any role.
 
 ```rust
 RoleConfig { template }
 EnvMapping { from, to }
 InfraConfig { cardano_up_package, env: Vec<EnvMapping> }
-ToolDef { id, name, description, website, languages, nix_packages, nix_self_contained: bool, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig> }
-ToolDef { id, name, description, website, languages, nix_packages, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig>, experimental: bool }
+CompatConfig { consumes: Vec<Seam>, serves: Vec<Seam>, self_contained_devnet: bool }
+ToolDef { id, name, description, website, languages, nix_packages, nix_self_contained: bool, detect, roles: HashMap<Role, RoleConfig>, infra: Option<InfraConfig>, fullstack: Option<RoleConfig>, experimental: bool, compat: CompatConfig }
 ```
 
 #### 3.2.1 Experimental tools
@@ -226,9 +242,37 @@ Experimental status is both **surfaced and gated**:
     declining drops just that tool and keeps the rest. `--allow-experimental` pre-acknowledges and
     skips the confirm.
 
+#### 3.2.2 Off-chain ↔ provider compatibility
+
+An off-chain tool reaches a chain over one or more **seams** (`consumes`); its **providers** — the
+selected devnet plus every selected infra tool — each expose seams (`serves`). The gate
+(`registry::compat::check`, pure) evaluates the single off-chain tool against the **union** of its
+selected providers:
+
+- **Compatible** when at least one selected provider (that declares a seam) serves a seam the
+  off-chain tool consumes. So a compatible devnet still covers an otherwise-mismatched extra infra
+  tool, and mixing providers is fine as long as one fits.
+- **`self_contained_devnet`** (e.g. Tx3, which bundles its own Dolos): a *separately selected devnet*
+  is redundant → incompatible, regardless of seams. Infra is unaffected (it can still serve the tool).
+- **Permissive** when the off-chain tool declares no `consumes`, or no selected provider declares a
+  `serves` — supplementary infra (a bare node, a submit API) and un-annotated tools never fabricate a
+  conflict, and an off-chain tool with no local provider falls back to a public one (§7). A seam is
+  declared only when a tool can actually build the reference example over it — e.g. Dolos serves
+  `u5c`, not `blockfrost`, because its minibf omits tx evaluation.
+
+Enforcement mirrors the experimental gate (§3.2.1):
+
+- **One-shot / JSON**: an incompatible selection is the usage error `incompatible_tools` (§2.5), exit
+  2 — nothing is generated — unless `--ignore-warning` is passed, which downgrades it to a warning and
+  proceeds.
+- **Interactive**: an incompatible **devnet** option is shown as `✗ unavailable — <reason>` and can't
+  be picked (unless `--ignore-warning`). Infra is multi-select with union semantics, so individual
+  infra picks aren't disabled; the run-level gate covers them.
+
 Load-time validation (`registry/loader.rs`), all fatal:
 - unparseable TOML → `RegistryError::Parse { file }`.
 - unknown role key → `RegistryError::UnknownRole { file, role }`.
+- unknown seam in `[compat]` → `RegistryError::UnknownSeam { file, seam }`.
 - duplicate `tool.id` → `RegistryError::DuplicateId { id }`.
 - `[fullstack]` without both on-chain and off-chain roles → `RegistryError::FullstackRolesMissing { id }`.
 - zero tools discovered → `RegistryError::Empty`.

@@ -17,3 +17,8 @@ detect = [{ file = "package.json", contains = "@meshsdk" }]
 
 [roles.off-chain]
 template = "meshjs/off-chain"
+
+# MeshJS ships Blockfrost (→ Yaci Store), UTxORPC (→ Dolos), and Ogmios
+# providers, so it can consume any of those seams.
+[compat]
+consumes = ["blockfrost", "u5c", "ogmios"]

@@ -19,3 +19,8 @@ template = "_infra/cardano-up"
 [infra]
 cardano_up_package = "ogmios"
 env = [{ from = "OGMIOS_URL", to = "OGMIOS_URL" }]
+
+# Ogmios serves the node's protocols over JSON-RPC — a provider on its own, and
+# the other half of a Kupmios (Kupo + Ogmios) provider.
+[compat]
+serves = ["ogmios"]

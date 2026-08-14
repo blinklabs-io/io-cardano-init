@@ -22,3 +22,7 @@ env = [
     { from = "DINGO_BLOCKFROST", to = "INDEXER_URL" },
     { from = "DINGO_SOCKET_PATH", to = "NODE_SOCKET_PATH" },
 ]
+
+# Dingo serves a Blockfrost-compatible HTTP API (published as INDEXER_URL).
+[compat]
+serves = ["blockfrost"]

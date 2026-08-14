@@ -18,6 +18,11 @@ template = "scalus/on-chain"
 [roles.off-chain]
 template = "scalus/off-chain"
 
+# Scalus's off-chain uses a Blockfrost provider (INDEXER_URL → a devnet's
+# Blockfrost-compatible API, e.g. Yaci Store).
+[compat]
+consumes = ["blockfrost"]
+
 # Used when Scalus fills BOTH roles: on-chain + off-chain collapse into one
 # unified `protocol/` component (a single sbt build, shared types) instead of two
 # folders handing off through blueprint/plutus.json.

@@ -95,6 +95,86 @@ impl fmt::Display for UnknownRoleError {
 impl std::error::Error for UnknownRoleError {}
 
 // ---------------------------------------------------------------------------
+// Seam / compatibility
+// ---------------------------------------------------------------------------
+
+/// A connection "seam": the wire protocol an off-chain tool speaks to reach a
+/// chain endpoint, and that a devnet (or infra) tool exposes. Whether a given
+/// off-chain tool can use a given devnet is decided purely by whether their
+/// declared seams overlap — see [`crate::registry::compat`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Seam {
+    /// Blockfrost-compatible REST (Yaci Store, Blockfrost, …).
+    Blockfrost,
+    /// Tx3 Transaction Resolve Protocol (JSON-RPC), served by Dolos/Demeter.
+    Trp,
+    /// UTxORPC (u5c) gRPC.
+    U5c,
+    /// Ogmios JSON-RPC (half of a Kupmios provider; also a standalone provider
+    /// for tools that speak it directly).
+    Ogmios,
+    /// Kupo HTTP (the other half of a Kupmios provider).
+    Kupo,
+}
+
+impl Seam {
+    /// Parse from the kebab-case string used in TOML registry files.
+    pub fn from_kebab(s: &str) -> Result<Self, UnknownSeamError> {
+        match s {
+            "blockfrost" => Ok(Seam::Blockfrost),
+            "trp" => Ok(Seam::Trp),
+            "u5c" => Ok(Seam::U5c),
+            "ogmios" => Ok(Seam::Ogmios),
+            "kupo" => Ok(Seam::Kupo),
+            _ => Err(UnknownSeamError(s.to_string())),
+        }
+    }
+
+    /// Human-readable label used in compatibility messages.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Seam::Blockfrost => "Blockfrost",
+            Seam::Trp => "TRP",
+            Seam::U5c => "UTxORPC",
+            Seam::Ogmios => "Ogmios",
+            Seam::Kupo => "Kupo",
+        }
+    }
+}
+
+impl fmt::Display for Seam {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnknownSeamError(pub String);
+
+impl fmt::Display for UnknownSeamError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown seam: '{}'", self.0)
+    }
+}
+
+impl std::error::Error for UnknownSeamError {}
+
+/// Devnet-compatibility metadata for a tool, from its optional `[compat]` table.
+///
+/// Off-chain tools declare the seam(s) they `consumes`; devnet/infra tools
+/// declare the seam(s) they `serves`. A `self_contained_devnet` tool (e.g. Tx3,
+/// which bundles its own Dolos) needs no devnet role at all — pairing it with
+/// one is reported as incompatible. Every field defaults empty/false, so a tool
+/// without a `[compat]` table imposes no constraints. See
+/// [`crate::registry::compat`].
+#[derive(Debug, Clone, Default)]
+pub struct CompatConfig {
+    pub consumes: Vec<Seam>,
+    pub serves: Vec<Seam>,
+    pub self_contained_devnet: bool,
+}
+
+// ---------------------------------------------------------------------------
 // ToolDef / RoleConfig
 // ---------------------------------------------------------------------------
 
@@ -191,6 +271,9 @@ pub struct ToolDef {
     /// `Some` requires both `Role::OnChain` and `Role::OffChain` (validated at
     /// load); `protocol` is a fused component, not a `Role`.
     pub fullstack: Option<RoleConfig>,
+    /// Devnet-compatibility metadata (from `[compat]`). Drives the off-chain ↔
+    /// devnet compatibility gate; defaults empty (no constraints).
+    pub compat: CompatConfig,
 }
 
 // ---------------------------------------------------------------------------

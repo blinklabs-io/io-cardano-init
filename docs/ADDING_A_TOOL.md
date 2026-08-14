@@ -82,6 +82,48 @@ All three shapes are first-class, so you provide three templates. Rules:
 | `devnet` | Local throwaway chain to develop and integration-test against |
 | `formal-methods` | Specification and automated verification |
 
+### Declaring provider compatibility (`[compat]`)
+
+An off-chain tool reaches a local chain over one or more **seams** — the wire protocols it speaks — and its **providers** (the selected devnet and/or infra tools) each expose some set of seams. If none of the selected providers serve a seam the off-chain tool consumes, they can't talk and the generated project won't run. The optional `[compat]` table lets the CLI catch that **before** generation instead of handing the user a broken project. It's pure data, decided by `registry::compat` with no per-pair logic.
+
+The seams today:
+
+| Seam | Wire protocol | Served by | Consumed by |
+|---|---|---|---|
+| `blockfrost` | Blockfrost-compatible REST | Yaci, Dingo | Evolution, Mesh, Scalus |
+| `u5c` | UTxORPC (gRPC) | Dolos | Mesh |
+| `trp` | Tx3 Transaction Resolve Protocol | (self-hosted; Dolos/Demeter) | Tx3 |
+| `ogmios` | Ogmios JSON-RPC | Ogmios | Evolution, Mesh |
+| `kupo` | Kupo HTTP | Kupo | Evolution |
+
+`ogmios` + `kupo` together form a **Kupmios** provider; an off-chain tool that uses Kupmios lists both, and a match on either counts as usable (so a partial selection is allowed, not force-completed).
+
+A seam means "a **working** provider for the templates," not merely "an endpoint exists." Dolos, for instance, exposes a Blockfrost-compatible "minibf" API, but it omits tx evaluation (`/utils/txs/evaluate`), which off-chain Blockfrost providers need to budget script execution units — so Dolos declares `u5c` (its complete provider), not `blockfrost`. Declare a seam only when a tool can actually build the (script-based) reference example over it.
+
+Declare what your tool consumes or serves:
+
+```toml
+# An off-chain tool: which seam(s) it can consume.
+[compat]
+consumes = ["blockfrost", "kupo", "ogmios"]   # e.g. Evolution (Blockfrost + Kupmios)
+
+# A devnet or infra tool: which seam(s) it exposes to off-chain consumers.
+[compat]
+serves = ["blockfrost"]            # e.g. Yaci (devnet) or Dingo (infra); Dolos serves ["u5c"]
+
+# A tool that bundles its OWN devnet and needs no devnet role at all.
+[compat]
+consumes = ["trp"]
+self_contained_devnet = true       # e.g. Tx3 — a separately-chosen devnet is reported incompatible
+```
+
+How the gate behaves — it evaluates the off-chain tool against the **union of all selected providers (the devnet plus every infra tool)**:
+
+- **Compatible** when at least one selected provider serves a seam the off-chain tool consumes. So `--off-chain meshjs --infra dolos` works (u5c), and `--off-chain evolution --devnet yaci --infra dolos` works too — Yaci covers Evolution's Blockfrost seam even though the extra Dolos doesn't.
+- **Incompatible** when providers are selected but none serve a consumed seam → one-shot **stops generation** with `CliError::IncompatibleTools` (exit 2), listing the providers that would work for the off-chain tool and the off-chain tools that would work with the selected providers; `--ignore-warning` downgrades the stop to a warning. Interactive mode shows an incompatible **devnet** option as `✗ unavailable — <reason>` (infra is multi-select with union semantics, so individual infra picks aren't disabled — the run-level gate covers them).
+- **Self-hosting** (`self_contained_devnet`) makes a separately-selected devnet redundant/incompatible regardless of seams.
+- **`[compat]` is optional and permissive**: a tool with no `[compat]` table (or empty `consumes`/`serves`) imposes no constraint. Supplementary infra that isn't an off-chain endpoint (a bare node, a submit API) simply declares no `serves`, so it never triggers a conflict, and an off-chain tool with no selected provider falls back to a public provider per the interface contract. A mismatch only becomes a hard stop when both sides declare seams.
+
 ---
 
 ## Step 2: Create the template directory
@@ -210,6 +252,8 @@ dotenv.config({ path: "../.env" });
 const indexerUrl = process.env.INDEXER_URL; // set → a local endpoint is up
 ```
 
+If your off-chain tool talks a specific wire protocol (Blockfrost, TRP, UTxORPC), declare it with `consumes` in `[compat]` (see [Declaring provider compatibility](#declaring-provider-compatibility-compat)) so an incompatible provider pairing is caught before generation. A tool that bundles its own devnet (and reads no `.env` endpoint) instead sets `self_contained_devnet = true`.
+
 **Fullstack tools** (a `[fullstack]` template, rendered into `protocol/`) must satisfy the on-chain contract from the fused component: `build` **writes `../blueprint/plutus.json`**, and the component reads/writes `../.env` like an off-chain consumer. Internally it may link its on-chain and off-chain halves directly (shared types, no blueprint round-trip); the blueprint file is written for the *other* roles (devnet/formal/infra), which still consume it. The three mandatory Justfile targets (`build`/`test`/`clean`) apply, and `dev` is optional as usual.
 
 **Tools that provision a local chain endpoint** must write the connection details to `../.env` during `dev`. This applies to **infrastructure** services and, equally, to a **local devnet in the devnet role** (e.g. Yaci DevKit) — the seam is the `.env` keys, not the role. Use the standard variable names:
@@ -257,7 +301,7 @@ connection var), promote it: add a `contract::ENV_*` constant and a seeded
 `KEY=` line in `templates/_base/env.jinja` so every project always carries it.
 See `docs/proposals/infra-via-cardano-up.md` for the full model.
 
-**Devnet tools** provision a local throwaway chain. They should read both the blueprint and the `.env` if they are present, but must work if neither exists, and write the connection vars above during `dev` — that is how off-chain components reach the devnet, and it composes with any off-chain tool without per-pair code.
+**Devnet tools** provision a local throwaway chain. They should read both the blueprint and the `.env` if they are present, but must work if neither exists, and write the connection vars above during `dev` — that is how off-chain components reach the devnet, and it composes with any off-chain tool without per-pair code. Declare the seam(s) the devnet exposes with `serves` in `[compat]` (see [Declaring provider compatibility](#declaring-provider-compatibility-compat)) so the CLI can steer users away from an off-chain tool it can't serve.
 
 **Formal-methods tools** have no extra contract beyond the four Justfile targets.
 
