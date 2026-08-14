@@ -21,6 +21,7 @@ my-protocol/
 ├── blueprint/    # shared CIP-57 contract interface
 ├── .env          # shared between components
 ├── Justfile      # Commands to build, test, and clean
+├── AGENTS.md     # Agent brief: layout, contract, workflow, docs, skills (CLAUDE.md imports it)
 └── README.md
 
 $ cd my-protocol && just test
@@ -111,7 +112,15 @@ Every on-chain and off-chain template ships the **same worked example — a gift
 
 **Fullstack tools.** Some tools (e.g. Scalus) implement both on-chain and off-chain in one language. Pick such a tool for both roles (e.g., `--fullstack scalus`, or `--on-chain scalus --off-chain scalus`) and instead of two folders you get a single unified **`protocol/`** component. It still writes the standard `blueprint/plutus.json` and reads `.env`, so it composes with devnet, formal-methods, and infrastructure.
 
-**Compatibility checks.** Not every off-chain tool can talk to every provider: each speaks a *seam* (wire protocol — Blockfrost, UTxORPC, TRP, Ogmios, Kupo) and each devnet/infra provider serves some set of them. `cardano-init` knows these and **stops before generating** a project whose off-chain tool can't reach a chain from its selected providers — e.g. `--off-chain tx3 --devnet yaci` (Tx3 speaks TRP; Yaci serves Blockfrost — and Tx3 bundles its own devnet anyway), or `--off-chain evolution --infra dolos` (Evolution has no UTxORPC provider). The error lists the providers that *would* work; pass `--ignore-warning` to scaffold the combination anyway. Interactive mode simply hides the incompatible options.
+**Compatibility checks.** Not every off-chain tool can talk to every provider and each devnet/infra provider serves some set of them. `cardano-init` knows these and **stops before generating** a project whose off-chain tool can't reach a chain from its selected providers. The error lists the providers that *would* work; pass `--ignore-warning` to scaffold the combination anyway. Interactive mode simply hides the incompatible options.
+
+## For coding agents
+
+`cardano-init` is built to be driven by LLMs, end to end:
+
+- **Machine-readable interface.** `cardano-init list --format json` enumerates every role and tool; any command accepts `--format json` and emits a stable envelope with machine-readable error `code`s and a `context` that says how to fix each error. One-shot mode (`--name …`) is fully non-interactive, so an agent can scaffold in a single call. See [TECH_SPEC](docs/TECH_SPEC.md) §2.
+- **Generated `AGENTS.md`.** Every project ships an `AGENTS.md` (plus a `CLAUDE.md` that imports it) tailored to the chosen stack: the layout, the interface contract and its invariants, the exact `just` workflow, per-tool official doc links, and the [cardano-dev-skills](https://github.com/cardano-foundation/cardano-dev-skills) most relevant to that stack. An agent dropped into a fresh project knows what it is and what to do next.
+- **Works in tandem with [cardano-dev-skills](https://github.com/cardano-foundation/cardano-dev-skills).** That Cardano Foundation skill set is the *knowledge* layer (writing validators, building transactions, debugging on-chain failures); `cardano-init` is the *scaffolding* layer. The generated `AGENTS.md` points agents at the plugin and the right skills for the stack they're in.
 
 ## Status
 

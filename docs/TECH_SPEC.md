@@ -410,7 +410,7 @@ Determinism note: any consumer that emits tools/roles must sort (§11), since `b
 
 `planner::plan` emits `FileEntry`s in exactly this order:
 
-1. **Base layer** (always): `Justfile`, `README.md`, `.gitignore`, `.env`.
+1. **Base layer** (always): `Justfile`, `README.md`, `AGENTS.md` (rendered), `CLAUDE.md` (static), `.gitignore`, `.env`. `AGENTS.md` is the tailored agent brief (stack, interface contract, `just` workflow, per-tool doc links, and the relevant [cardano-dev-skills](https://github.com/cardano-foundation/cardano-dev-skills) for the selection); `CLAUDE.md` is a static `@AGENTS.md` import so Claude Code (which does not read `AGENTS.md` natively) picks it up.
 2. **Blueprint dir**: `blueprint/.gitkeep`, **if  any non-infrastructure role is present** (§6.2). Source is `TemplateSource::Inline(empty)`.
 3. **Role layers**: assignments processed in **`Role::ALL` order** (not flag order). For each, read the template manifest and append its files (rendered per §4.2). Two roles aggregate instead of emitting per-assignment:
    - **Fullstack collapses**: when the same tool fills on-chain + off-chain and declares a `[fullstack]` template (§3.4), the two assignments emit **one** `protocol/` component from the `[fullstack]` template, emitted **once** on the first of the pair (on-chain sorts first in `Role::ALL`), the off-chain assignment is skipped. `has_on_chain`/`has_off_chain` are false; `has_fullstack` is true. Because both assignments remain in the selection, the blueprint predicate (§6.2) is unchanged.

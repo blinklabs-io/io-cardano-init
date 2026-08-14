@@ -67,7 +67,7 @@ cardano-init/
 │   ├── aiken.toml  meshjs.toml  scalus.toml  blaster.toml
 │
 └── templates/                  # Embedded data: tool/role template trees
-    ├── _base/    (Justfile.jinja, README.md.jinja, gitignore, env.jinja)
+    ├── _base/    (Justfile.jinja, README.md.jinja, AGENTS.md.jinja, CLAUDE.md, gitignore, env.jinja)
     ├── _nix/     (flake.nix.jinja)
     └── <tool>/<role>/  (manifest.toml + template files)
 ```
@@ -236,7 +236,7 @@ Walks `selection.assignments`, resolves each tool against the registry, and buil
 ### 6.2 Plan (`planner.rs`)
 
 Produces the ordered `FilePlan`:
-1. **Base layer** (always): `Justfile`, `README.md`, `.gitignore`, `.env`.
+1. **Base layer** (always): `Justfile`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, `.env`.
 2. **Blueprint dir**: `blueprint/.gitkeep`, emitted whenever the selection includes any blueprint-producing-or-consuming role: i.e., any role **except** infrastructure (equivalently: present unless the project is infrastructure-only).
 3. **Role layers**: for each assignment, read the template's `manifest.toml` and add its files. Two cases aggregate instead of emitting one directory per assignment:
    - **Fullstack collapses**: when the same tool fills on-chain + off-chain and declares a `[fullstack]` template (§3.2), the two assignments emit **one** `protocol/` component (`fullstack.template`), emitted once on the first of the pair; the second is skipped. `has_fullstack` is set; `has_on_chain`/`has_off_chain` are not.
