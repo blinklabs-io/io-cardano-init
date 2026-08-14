@@ -1,0 +1,136 @@
+// Gift Card — Tx3 off-chain protocol.
+//
+// Creating a gift card mints one unique token and locks the gift lovelace at the
+// `redeem` script address. Redeeming burns that token and releases the locked
+// lovelace to whoever spends the UTxO.
+//
+//   - `create`  spend the seed UTxO, mint the gift-card token, and lock it (plus
+//               the gift lovelace) at the redeem address with an inline datum.
+//   - `redeem`  spend the locked UTxO and burn the token, releasing the lovelace.
+//
+// Both scripts are *parameterized at runtime*: the mint policy by
+// (token_name, seed UTxO), the redeem spend by (token_name, policy_id). The
+// final applied script bytes / hashes therefore aren't known until a seed is
+// picked, so they are supplied per-transaction through the `env` block below
+// (computed in `src/blueprint.ts` from `blueprint/plutus.json`), not baked in at
+// build time.
+//
+// Redeemer CBOR layout (must match the Aiken blueprint):
+//   Action = Mint (Constr 0) | Burn (Constr 1)      // mint-policy redeemer
+//   redeem spend redeemer = unit (Constr 0 [])      // ignored on-chain
+
+env {
+    /// Policy id of the (parameterized) gift-card minting policy — also the mint script's hash.
+    gift_policy: Bytes,
+    /// Serialized (single-CBOR) bytes of the parameterized `gift_card` mint script.
+    gift_script: Bytes,
+    /// Serialized (single-CBOR) bytes of the parameterized `redeem` spend script.
+    redeem_script: Bytes,
+    /// Asset name of the gift-card token.
+    token_name: Bytes,
+}
+
+/// The user's wallet: funds the mint, and receives the released lovelace.
+party Owner;
+
+/// The redeem script address where the gift is locked. Bound (off-chain) to the
+/// address derived from `redeem_script`.
+party Redeem;
+
+// Mint-policy redeemer. `Mint` is constructor 0, `Burn` is constructor 1
+type Action {
+    Mint,
+    Burn,
+}
+
+/// Create a gift card: spend the seed UTxO, mint the unique token, and lock it
+/// with `gift_lovelace` at the redeem address.
+tx create(
+    /// The UTxO consumed as the mint seed. Must equal the UTxO the `gift_card`
+    /// policy was parameterized with.
+    seed: UtxoRef,
+    /// Lovelace to lock at the redeem address alongside the token.
+    gift_lovelace: Int,
+) {
+    input funding {
+        from: Owner,
+        ref: seed,
+        min_amount: Ada(gift_lovelace) + fees,
+    }
+
+    mint {
+        amount: AnyAsset(gift_policy, token_name, 1),
+        redeemer: Action::Mint {},
+    }
+
+    output locked {
+        to: Redeem,
+        amount: AnyAsset(gift_policy, token_name, 1) + Ada(gift_lovelace),
+        datum: (),
+    }
+
+    output {
+        to: Owner,
+        amount: funding - Ada(gift_lovelace) - fees,
+    }
+
+    collateral {
+        from: Owner,
+        min_amount: fees,
+    }
+
+    signers {
+        Owner,
+    }
+
+    cardano::plutus_witness {
+        version: 3,
+        script: gift_script,
+    }
+}
+
+/// Redeem a gift card: spend the locked UTxO and burn the token, releasing the
+/// locked lovelace back to the owner.
+tx redeem(
+    /// The locked gift-card UTxO at the redeem address (from `create`).
+    locked: UtxoRef,
+) {
+    input gift {
+        from: Redeem,
+        ref: locked,
+        redeemer: (),
+    }
+
+    input gas {
+        from: Owner,
+        min_amount: fees,
+    }
+
+    burn {
+        amount: AnyAsset(gift_policy, token_name, 1),
+        redeemer: Action::Burn {},
+    }
+
+    output {
+        to: Owner,
+        amount: gift + gas - AnyAsset(gift_policy, token_name, 1) - fees,
+    }
+
+    collateral {
+        from: Owner,
+        min_amount: fees,
+    }
+
+    signers {
+        Owner,
+    }
+
+    cardano::plutus_witness {
+        version: 3,
+        script: redeem_script,
+    }
+    cardano::plutus_witness {
+        version: 3,
+        script: gift_script,
+    }
+}

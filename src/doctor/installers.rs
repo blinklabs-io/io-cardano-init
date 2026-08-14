@@ -26,6 +26,7 @@ pub enum Installer {
     Npm,
     Aikup,
     CardanoUp,
+    Tx3up,
     Curl,
     PowerShell,
 }
@@ -44,6 +45,7 @@ impl Installer {
         Installer::Npm,
         Installer::Aikup,
         Installer::CardanoUp,
+        Installer::Tx3up,
         Installer::Curl,
         Installer::PowerShell,
     ];
@@ -63,6 +65,7 @@ impl Installer {
             "npm" => Installer::Npm,
             "aikup" => Installer::Aikup,
             "cardano-up" => Installer::CardanoUp,
+            "tx3up" => Installer::Tx3up,
             "curl" => Installer::Curl,
             "powershell" => Installer::PowerShell,
             _ => return None,
@@ -84,6 +87,7 @@ impl Installer {
             Installer::Npm => "npm",
             Installer::Aikup => "aikup",
             Installer::CardanoUp => "cardano-up",
+            Installer::Tx3up => "tx3up",
             Installer::Curl => "curl",
             Installer::PowerShell => "powershell",
         }
@@ -103,6 +107,7 @@ impl Installer {
             Installer::Npm => &["npm"],
             Installer::Aikup => &["aikup"],
             Installer::CardanoUp => &["cardano-up"],
+            Installer::Tx3up => &["tx3up"],
             Installer::Curl => &["curl"],
             Installer::PowerShell => &["powershell", "pwsh"],
         }
@@ -116,6 +121,7 @@ impl Installer {
             Installer::Go => &["go"],
             Installer::Aikup => &["aikup"],
             Installer::CardanoUp => &["cardano-up"],
+            Installer::Tx3up => &["tx3up"],
             // System package managers, nix, and the download-and-run shells are
             // terminal: we detect them, never install them.
             Installer::Brew
@@ -147,6 +153,11 @@ impl Installer {
             Installer::Aikup if arg.is_empty() => "aikup install".to_string(),
             Installer::Aikup => format!("aikup install {arg}"),
             Installer::CardanoUp => format!("cardano-up install {arg}"),
+            // An empty arg means "install the toolchain for the active channel"
+            // (trix/dolos/cshell/tx3c) — tx3up needs no target, so avoid a stray
+            // trailing space (matches the Aikup shape).
+            Installer::Tx3up if arg.is_empty() => "tx3up install".to_string(),
+            Installer::Tx3up => format!("tx3up install {arg}"),
             Installer::Curl => format!("curl -sSfL {arg} | sh"),
             Installer::PowerShell => format!("powershell -c \"irm {arg} | iex\""),
         }

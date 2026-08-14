@@ -73,6 +73,8 @@ jobs:
             runs-on: ubuntu-latest
           - installer: aikup
             runs-on: ubuntu-latest
+          - installer: tx3up
+            runs-on: ubuntu-latest
     steps:
       # Bare distro containers lack the basics checkout and the recipes need.
       - name: Bootstrap container (apt)
@@ -110,6 +112,17 @@ jobs:
       - name: Bootstrap aikup
         if: matrix.installer == 'aikup'
         run: npm install -g @aiken-lang/aikup
+
+      # tx3up is likewise a bootstrappable installer (Installer::bootstrap ⇒
+      # tx3up). Install the manager via its own installer script, then put it on
+      # PATH so its recipe (`tx3up install` → the toolchain) can run.
+      - name: Bootstrap tx3up
+        if: matrix.installer == 'tx3up'
+        run: |
+          curl -LsSf https://github.com/tx3-lang/tx3up/releases/latest/download/tx3up-installer.sh | sh
+          tx3up_bin="$(find "$HOME" -maxdepth 4 -type f -name tx3up 2>/dev/null | head -1)"
+          if [ -z "$tx3up_bin" ]; then echo "tx3up not found after install" >&2; exit 1; fi
+          dirname "$tx3up_bin" >> "$GITHUB_PATH"
 
       - name: Verify recipes for ${{ matrix.installer }}
         run: python3 .github/scripts/verify_installers.py ${{ matrix.installer }}

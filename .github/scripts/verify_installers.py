@@ -53,6 +53,7 @@ COMMANDS: dict[str, str] = {
     "npm": "npm install -g {arg}",
     "aikup": "aikup install {arg}",
     "cardano-up": "cardano-up install {arg}",
+    "tx3up": "tx3up install {arg}",
     "curl": "curl -sSfL {arg} | sh",
     "powershell": 'powershell -c "irm {arg} | iex"',
 }
@@ -66,8 +67,12 @@ EXTRA_BIN_DIRS = [
     Path.home() / ".aiken" / "bin",
     Path.home() / "go" / "bin",
     Path.home() / ".local" / "bin",
+    # tx3up installs the toolchain (trix/dolos/…) under ~/.tx3/<channel>/bin,
+    # with `default` symlinked to the active channel.
+    Path.home() / ".tx3" / "default" / "bin",
     Path("/root/.cargo/bin"),
     Path("/root/.aiken/bin"),
+    Path("/root/.tx3/default/bin"),
 ]
 
 

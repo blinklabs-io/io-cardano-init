@@ -1,0 +1,6 @@
+node_modules/
+# trix build artifacts + generated client + local devnet state.
+.tx3/
+.env.local
+# CLI gift-card state (seed + token per redeem address, for `just redeem`).
+.gift-cards.json

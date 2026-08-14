@@ -1,0 +1,62 @@
+[manifest]
+summary = "Tx3 off-chain Gift Card: a .tx3 protocol + generated TS client, with a bundled ephemeral Dolos devnet for e2e tests and a create/redeem CLI"
+
+[[files]]
+source = "trix.toml"
+dest = "trix.toml"
+
+[[files]]
+source = "giftcard.tx3"
+dest = "giftcard.tx3"
+
+[[files]]
+source = "package.json.jinja"
+dest = "package.json"
+
+[[files]]
+source = "tsconfig.json"
+dest = "tsconfig.json"
+
+[[files]]
+source = ".env.example"
+dest = ".env.example"
+
+[[files]]
+source = ".gitignore"
+dest = ".gitignore"
+
+[[files]]
+source = "Justfile.jinja"
+dest = "Justfile"
+
+[[files]]
+source = "src/blueprint.ts"
+dest = "src/blueprint.ts"
+
+[[files]]
+source = "src/cli.ts"
+dest = "src/cli.ts"
+
+[[files]]
+source = "src/giftcard.devnet.test.ts"
+dest = "src/giftcard.devnet.test.ts"
+
+[[files]]
+source = "devnet/utils.ts"
+dest = "devnet/utils.ts"
+
+[[files]]
+source = "devnet/genesis/byron.json"
+dest = "devnet/genesis/byron.json"
+
+[[files]]
+source = "devnet/genesis/shelley.json"
+dest = "devnet/genesis/shelley.json"
+
+[[files]]
+source = "devnet/genesis/alonzo.json"
+dest = "devnet/genesis/alonzo.json"
+
+[[files]]
+source = "devnet/genesis/conway.json"
+dest = "devnet/genesis/conway.json"
