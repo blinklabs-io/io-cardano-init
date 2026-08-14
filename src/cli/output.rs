@@ -1,6 +1,6 @@
-use console::style;
 use serde_json::json;
 
+use super::theme;
 use super::{CliError, Format};
 use crate::doctor::Report;
 use crate::doctor::installers::Installer;
@@ -24,12 +24,121 @@ fn emit_json_ok(data: serde_json::Value) {
     );
 }
 
-/// Render any error in the requested format.
+/// A borderless table (no rules, no outer frame) with content-fit columns —
+/// used for the aligned `doctor`/`list` sections. Coloring stays in the cells'
+/// `console`-styled strings; the `custom_styling` feature measures their width
+/// correctly so columns line up regardless of ANSI codes.
+fn borderless_table() -> comfy_table::Table {
+    use comfy_table::{ContentArrangement, Table, presets};
+    let mut table = Table::new();
+    table.load_preset(presets::NOTHING);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table
+}
+
+/// Print a table as a left-indented block, matching the two-space offset of the
+/// surrounding human output. Left cell-padding is zeroed (right padding of 2
+/// separates columns) so the first column sits flush under [`theme::PAD`], and
+/// each row is re-prefixed with it since `comfy-table` renders from column zero.
+fn print_table(mut table: comfy_table::Table, indent: &str) {
+    for column in table.column_iter_mut() {
+        column.set_padding((0, 2));
+    }
+    for line in table.to_string().lines() {
+        println!("{}{}", indent, line.trim_end());
+    }
+}
+
+/// Print a rounded, cyan-framed panel wrapping the pre-styled `rows`, with the
+/// `title` centered in the top border. An optional `badge` is printed on its own
+/// line directly above the frame, flush-left at [`theme::PAD`] — so a scaffold
+/// result's ` CREATED ` pill lines up with the ` DEPS OK ` pill further down.
+/// Widths are measured with ANSI stripped (`measure_text_width`) so colored
+/// content still aligns inside the frame.
+fn print_panel(title: &str, badge: Option<console::StyledObject<String>>, rows: &[String]) {
+    for line in panel_lines(title, badge, rows) {
+        println!("{line}");
+    }
+}
+
+/// Build the styled, `PAD`-indented lines of a panel (see [`print_panel`]).
+/// Returned rather than printed so callers can route them to stdout (normal
+/// output) or stderr (the error presenter).
+fn panel_lines(
+    title: &str,
+    badge: Option<console::StyledObject<String>>,
+    rows: &[String],
+) -> Vec<String> {
+    let title_w = console::measure_text_width(title);
+    let interior = rows
+        .iter()
+        .map(|r| console::measure_text_width(r))
+        .chain(std::iter::once(title_w))
+        .max()
+        .unwrap_or(0);
+    // Run length between the two corner glyphs: 2 left margin + interior + 1 right.
+    let span = interior + 3;
+
+    let mut out = Vec::new();
+    if let Some(badge) = badge {
+        out.push(format!("{}{}", theme::PAD, badge));
+    }
+
+    // ╭──── <title centered> ────╮ — dashes fill each side of " title ".
+    let pad_total = span - 2 - title_w; // dashes shared between the two sides
+    let left = pad_total / 2;
+    let right = pad_total - left;
+    out.push(format!(
+        "{}{}{} {} {}{}",
+        theme::PAD,
+        theme::accent("╭"),
+        theme::accent("─".repeat(left)),
+        theme::accent_strong(title),
+        theme::accent("─".repeat(right)),
+        theme::accent("╮"),
+    ));
+    // │  <row padded to interior>  │
+    for row in rows {
+        let gap = interior - console::measure_text_width(row);
+        out.push(format!(
+            "{}{}  {}{} {}",
+            theme::PAD,
+            theme::accent("│"),
+            row,
+            " ".repeat(gap),
+            theme::accent("│"),
+        ));
+    }
+    // ╰──────────────╯
+    out.push(format!(
+        "{}{}",
+        theme::PAD,
+        theme::accent(format!("╰{}╯", "─".repeat(span))),
+    ));
+    out
+}
+
+/// Print a section label followed by a horizontal rule — the lighter framing
+/// element that pairs with [`print_panel`] (used for section headings and the
+/// "Next steps" block).
+fn print_rule(label: &str) {
+    const WIDTH: usize = 44;
+    let dashes = WIDTH.saturating_sub(console::measure_text_width(label) + 1);
+    println!(
+        "{}{} {}",
+        theme::PAD,
+        theme::strong(label),
+        theme::dim("─".repeat(dashes)),
+    );
+}
+
+/// Render any error in the requested format (always to stderr).
 ///
-/// In `json`, an error envelope `{ ok: false, error: { code, message, context } }`
-/// is written to stderr. In `human`, the styled `error: …` line is written to
-/// stderr — except for an interactive abort (exit code 0), which is silent.
-pub fn print_error(err: &CliError, format: Format) {
+/// In `json`, an error envelope `{ ok: false, error: { code, message, context } }`.
+/// In `human`, a red ` ERR (<code>) ` pill, the explanation, and — when the
+/// error carries one — a framed `help` panel with the remedy. An interactive
+/// abort (exit code 0) is a user choice, not an error, so it stays silent.
+pub fn print_error(err: CliError, format: Format) {
     match format {
         Format::Json => {
             let envelope = json!({
@@ -48,10 +157,64 @@ pub fn print_error(err: &CliError, format: Format) {
         }
         Format::Human => {
             if err.exit_code() != 0 {
-                eprintln!("{}: {}", style("error").red().bold(), err);
+                print_human_error(&err);
             }
         }
     }
+}
+
+/// Wrap `text` to `width` columns on word boundaries.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if !current.is_empty() && current.len() + 1 + word.len() > width {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Render a `CliError` to stderr: a red ` ERR (<code>) ` pill, the wrapped
+/// explanation, then (if present) a framed `help` panel. The remedy comes from
+/// the error's miette `Diagnostic::help`; the pill name is the stable `code()`.
+fn print_human_error(err: &CliError) {
+    eprintln!();
+
+    // The explanation begins on the pill's line (like the DEPS pills), so it
+    // reads as the error's description; wrapped continuation lines align under
+    // where the text starts.
+    let pill = theme::badge_err(&format!("ERR ({})", err.code()));
+    let text_col = theme::PAD.len() + console::measure_text_width(&pill.to_string()) + 2;
+    let indent = " ".repeat(text_col);
+    let wrap_width = 80usize.saturating_sub(text_col).max(36);
+    let lines = wrap(&err.to_string(), wrap_width);
+
+    match lines.split_first() {
+        Some((first, rest)) => {
+            eprintln!("{}{}  {}", theme::PAD, pill, first);
+            for line in rest {
+                eprintln!("{indent}{line}");
+            }
+        }
+        None => eprintln!("{}{}", theme::PAD, pill),
+    }
+
+    if let Some(help) = miette::Diagnostic::help(err).map(|h| h.to_string()) {
+        let rows: Vec<String> = help.lines().map(str::to_string).collect();
+        eprintln!();
+        for line in panel_lines("help", None, &rows) {
+            eprintln!("{line}");
+        }
+    }
+    eprintln!();
 }
 
 /// Print the welcome banner for interactive mode.
@@ -59,29 +222,29 @@ pub fn print_welcome() {
     println!();
     println!(
         "  {} Let's set up your Cardano protocol project.",
-        style("Welcome to cardano-init!").bold()
+        theme::strong("Welcome to cardano-init!")
     );
     println!();
     println!("  A Cardano protocol typically has up to five components:");
     println!(
         "  {} Smart contract logic (validators) that runs on the ledger",
-        style("On-chain:").cyan().bold()
+        theme::accent_strong("On-chain:")
     );
     println!(
         "  {} Code that builds and submits transactions",
-        style("Off-chain:").cyan().bold()
+        theme::accent_strong("Off-chain:")
     );
     println!(
         "  {} Indexers and services that read chain data",
-        style("Infrastructure:").cyan().bold()
+        theme::accent_strong("Infrastructure:")
     );
     println!(
         "  {} Local throwaway chain to develop and test against",
-        style("Devnet:").cyan().bold()
+        theme::accent_strong("Devnet:")
     );
     println!(
         "  {} Specification and automated verification tools",
-        style("Formal methods:").cyan().bold()
+        theme::accent_strong("Formal methods:")
     );
     println!();
 }
@@ -136,17 +299,18 @@ fn print_experimental_warning(selection: &Selection, registry: &Registry) {
 
     println!();
     println!(
-        "  {} {}",
-        style("⚠ Experimental:").yellow().bold(),
-        style(names).yellow().bold()
+        "  {} {} {}",
+        theme::warn_mark(),
+        theme::warn_strong("Experimental:"),
+        theme::warn_strong(names)
     );
     println!(
         "    {}",
-        style("These tools may be unstable or incomplete (the tool itself and/or its").yellow()
+        theme::warn("These tools may be unstable or incomplete (the tool itself and/or its")
     );
     println!(
         "    {}",
-        style("integration). Expect rough edges and breaking changes.").yellow()
+        theme::warn("integration). Expect rough edges and breaking changes.")
     );
 }
 
@@ -162,58 +326,92 @@ pub fn print_incompatibility_warning(inc: &crate::registry::compat::Incompatibil
         .join(", ");
     println!();
     println!(
-        "  {} {} + {}",
-        style("⚠ Incompatible (ignored):").yellow().bold(),
-        style(&inc.off_chain_name).yellow().bold(),
-        style(providers).yellow().bold(),
+        "  {} {} {} + {}",
+        theme::warn_mark(),
+        theme::warn_strong("Incompatible (ignored):"),
+        theme::warn_strong(&inc.off_chain_name),
+        theme::warn_strong(providers),
     );
-    println!("    {}", style(&inc.reason).yellow());
+    println!("    {}", theme::warn(&inc.reason));
     println!(
         "    {}",
-        style("Scaffolding anyway (--ignore-warning); the generated project may not run as-is.")
-            .yellow()
+        theme::warn(
+            "Scaffolding anyway (--ignore-warning); the generated project may not run as-is."
+        )
     );
 }
 
-/// Print a summary of the selection before generation.
+/// The aligned `role  tool · lang` rows (plus `network` and, if set, `nix`) that
+/// fill the selection panel. Shared by the pre-generation summary and the
+/// post-generation success panel so they can't drift.
+fn summary_rows(selection: &Selection, registry: &Registry) -> Vec<String> {
+    let comps = components(selection, registry);
+
+    // Column widths for the aligned rows (labels are the role kebabs plus the
+    // trailing `network`/`nix` rows).
+    let label_w = comps
+        .iter()
+        .map(|c| c.kebab.len())
+        .chain([NETWORK_LABEL.len(), NIX_LABEL.len()])
+        .max()
+        .unwrap_or(0);
+    let name_w = comps
+        .iter()
+        .map(|c| {
+            registry
+                .get(&c.tool_id)
+                .map_or(c.tool_id.len(), |t| t.name.len())
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut rows: Vec<String> = Vec::new();
+    for c in &comps {
+        let tool = registry.get(&c.tool_id);
+        let name = tool.map_or_else(|| c.tool_id.clone(), |t| t.name.clone());
+        let lang = tool.and_then(|t| t.languages.first());
+        let experimental = tool.is_some_and(|t| t.experimental);
+
+        let name_cell = theme::accent(format!("{name:<name_w$}"));
+        let lang_cell = lang.map_or_else(String::new, |l| theme::dim(format!("· {l}")).to_string());
+        let tag = if experimental {
+            theme::warn(" [experimental]").to_string()
+        } else {
+            String::new()
+        };
+        rows.push(format!(
+            "{:<label_w$}  {name_cell}  {lang_cell}{tag}",
+            c.kebab
+        ));
+    }
+    rows.push(format!(
+        "{NETWORK_LABEL:<label_w$}  {}",
+        theme::accent(&selection.network)
+    ));
+    if selection.nix {
+        rows.push(format!("{NIX_LABEL:<label_w$}  {}", theme::good("yes")));
+    }
+    rows
+}
+
+/// Print a summary of the selection *before* generation, as a framed panel
+/// titled with the project name. Used for the interactive confirm step and the
+/// dry-run plan (the one-shot generate path skips straight to the success
+/// panel, which carries the same rows plus a `CREATED` badge).
 pub fn print_summary(selection: &Selection, registry: &Registry) {
     println!();
-    println!("  {}", style("Summary").bold().underlined());
-    println!();
-    println!("  Project:  {}", style(&selection.project_name).cyan());
-
-    for component in components(selection, registry) {
-        let role_label = component_label(&component.kebab);
-
-        let (tool_info, experimental) = if let Some(tool) = registry.get(&component.tool_id) {
-            // Infra providers carry no user-facing language, so omit the
-            // parenthetical rather than printing an empty "(?)".
-            let info = match tool.languages.first() {
-                Some(lang) => format!("{} ({})", tool.name, lang),
-                None => tool.name.clone(),
-            };
-            (info, tool.experimental)
-        } else {
-            (component.tool_id.clone(), false)
-        };
-
-        let styled = if experimental {
-            style(format!("{tool_info}  [experimental]")).yellow()
-        } else {
-            style(tool_info).cyan()
-        };
-        println!("  {:<12}{}", format!("{}:", role_label), styled);
-    }
-
-    println!("  Network:  {}", style(&selection.network).cyan());
-
-    if selection.nix {
-        println!("  Nix:      {}", style("yes").green());
-    }
-
+    print_panel(
+        &selection.project_name,
+        None,
+        &summary_rows(selection, registry),
+    );
     print_experimental_warning(selection, registry);
     println!();
 }
+
+/// Row labels for the non-component lines of the summary panel.
+const NETWORK_LABEL: &str = "network";
+const NIX_LABEL: &str = "nix";
 
 /// A generated component as reported to the user: its role (kebab) and tool id.
 struct Component {
@@ -249,19 +447,6 @@ fn components(selection: &Selection, registry: &Registry) -> Vec<Component> {
         });
     }
     out
-}
-
-/// The human, title-cased label for a component's role kebab (used in summaries).
-fn component_label(kebab: &str) -> &'static str {
-    match kebab {
-        "on-chain" => "On-chain",
-        "off-chain" => "Off-chain",
-        "protocol" => "Protocol",
-        "infrastructure" => "Infra",
-        "devnet" => "Devnet",
-        "formal-methods" => "Formal methods",
-        _ => "Component",
-    }
 }
 
 /// Build the `[{ role, tool }]` component list for a selection (collapse-aware).
@@ -301,7 +486,10 @@ pub fn print_dry_run(selection: &Selection, registry: &Registry, plan: &FilePlan
 
     print_summary(selection, registry);
 
-    println!("  {}", style(format!("{}/", selection.project_name)).bold());
+    println!(
+        "  {}",
+        theme::strong(format!("{}/", selection.project_name))
+    );
 
     let paths: Vec<Vec<&str>> = plan
         .entries
@@ -320,7 +508,7 @@ pub fn print_dry_run(selection: &Selection, registry: &Registry, plan: &FilePlan
     println!();
     println!(
         "  {} files would be generated.",
-        style(plan.entries.len()).bold()
+        theme::strong(plan.entries.len())
     );
     println!();
 }
@@ -358,11 +546,11 @@ fn print_tree(paths: &[Vec<&str>], depth: usize, _start: usize, indent: &mut Str
             println!(
                 "  {}{}{}",
                 indent,
-                style(connector).dim(),
-                style(format!("{name}/")).dim()
+                theme::dim(connector),
+                theme::dim(format!("{name}/"))
             );
         } else {
-            println!("  {}{}{}", indent, style(connector).dim(), name);
+            println!("  {}{}{}", indent, theme::dim(connector), name);
         }
 
         // Recurse into children that have more components
@@ -398,30 +586,15 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
         return;
     }
 
+    // The result is the same selection panel as the pre-generation summary,
+    // now carrying a CREATED badge in its header — so the project name and the
+    // per-component list aren't repeated in a second block.
     println!();
-    println!(
-        "  {} Created {}",
-        style("✔").green().bold(),
-        style(&selection.project_name).cyan().bold()
+    print_panel(
+        &selection.project_name,
+        Some(theme::badge_ok("CREATED")),
+        &summary_rows(selection, registry),
     );
-
-    for component in components(selection, registry) {
-        let experimental = registry
-            .get(&component.tool_id)
-            .is_some_and(|t| t.experimental);
-        let tag = if experimental {
-            style("  [experimental]").yellow().bold().to_string()
-        } else {
-            String::new()
-        };
-        println!(
-            "  {} Scaffolded {} ({}){}",
-            style("✔").green().bold(),
-            component.kebab,
-            component.tool_id,
-            tag
-        );
-    }
 
     // Reiterate the experimental caveat after generation (a one-shot user may
     // not have seen the pre-generation summary warning scroll past).
@@ -431,12 +604,23 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
     print_dep_advice(report);
 
     println!();
-    println!("  {}", style("Next steps:").bold());
-    println!("    cd {}", selection.project_name);
+    print_rule("Next steps");
+    println!(
+        "    {} {}",
+        theme::accent("→"),
+        theme::command(format!("cd {}", selection.project_name))
+    );
     if !report.all_required_present {
-        println!("    # install the missing dependencies listed above, then:");
+        println!(
+            "    {}",
+            theme::dim("# install the missing dependencies listed above, then:")
+        );
     }
-    println!("    just build");
+    println!(
+        "    {} {}",
+        theme::accent("→"),
+        theme::command("just build")
+    );
     println!();
 }
 
@@ -446,41 +630,83 @@ fn print_dep_advice(report: &Report) {
     if report.all_required_present {
         println!();
         println!(
-            "  {} All required dependencies are installed.",
-            style("✔").green().bold()
+            "  {}  all required dependencies present",
+            theme::badge_ok("DEPS OK")
         );
         return;
     }
 
     println!();
-    println!("  {}", style("Missing dependencies:").yellow().bold());
+    println!(
+        "  {}  install the required dependencies below",
+        theme::badge_warn("DEPS MISSING")
+    );
     for dep in report.missing_required() {
         print_missing_dep(dep);
     }
 }
 
-/// Render one missing dependency: its id, ordered install commands, and docs.
+/// Indent for the per-dependency detail (install methods + docs), one level
+/// deeper than the `✘ <dep>` header.
+const DEP_INDENT: &str = "      ";
+
+/// Render one missing dependency: a header that names it and announces the
+/// method list, then an aligned `command → status` table (the recommended path,
+/// any other ready methods, then those that first need an installer this host
+/// lacks), and the docs fallback.
 fn print_missing_dep(dep: &crate::doctor::DepStatus) {
     println!();
+
+    let has_methods = !dep.plan.is_empty() || !dep.alternatives.is_empty();
+    let lead_in = if has_methods {
+        "not installed — install with any of:"
+    } else {
+        "not installed — no automatic install method for this system"
+    };
     println!(
-        "  {} {} (required)",
-        style("✘").red().bold(),
-        style(&dep.id).bold()
+        "  {} {}  {}",
+        theme::caution(),
+        theme::strong(&dep.id),
+        theme::dim(lead_in)
     );
-    for step in &dep.plan {
-        println!("      {}", style(&step.command).cyan());
+
+    if has_methods {
+        // command → status, aligned into two columns. `Disabled` arrangement
+        // keeps long commands (e.g. curl one-liners) on one line.
+        let mut table = borderless_table();
+        table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
+
+        // The recommended path — a bootstrap chain is joined with `&&` so the
+        // whole thing is one copy-pasteable line.
+        if !dep.plan.is_empty() {
+            let command = dep
+                .plan
+                .iter()
+                .map(|s| s.command.as_str())
+                .collect::<Vec<_>>()
+                .join(" && ");
+            table.add_row(vec![
+                theme::command(command).to_string(),
+                theme::good("recommended").to_string(),
+            ]);
+        }
+        for alt in &dep.alternatives {
+            let status = if alt.available {
+                theme::dim("ready").to_string()
+            } else {
+                theme::warn(format!("requires {}", alt.installer)).to_string()
+            };
+            table.add_row(vec![theme::command(&alt.command).to_string(), status]);
+        }
+        print_table(table, DEP_INDENT);
     }
-    if dep.plan.is_empty() {
-        println!(
-            "      {}",
-            style("(no install method detected for this system)").dim()
-        );
-    }
+
     if let Some(docs) = &dep.docs {
         println!(
-            "      {} {}",
-            style("Docs:").dim(),
-            style(docs).underlined()
+            "{}{} {}",
+            DEP_INDENT,
+            theme::dim("docs:"),
+            theme::link(docs)
         );
     }
 }
@@ -518,26 +744,9 @@ pub fn print_doctor(
         return;
     }
 
-    println!();
-    println!("  {}", style("Dependency check").bold().underlined());
-
-    // Environment.
-    println!();
-    let installer_list = if installers.is_empty() {
-        "none detected".to_string()
-    } else {
-        installers.join(", ")
-    };
-    println!(
-        "  {} {:?}   {} {}",
-        style("OS:").dim(),
-        env.os,
-        style("Installers:").dim(),
-        installer_list
-    );
-
-    // Detected components. The mark reflects whether the tool's required
-    // dependencies are present, not merely that the component was detected.
+    // The dependency binaries already present on PATH. Surfaced as the panel's
+    // `tooling` row (a missing one shows up in "Missing dependencies", not here)
+    // and reused below to mark each component's readiness.
     let present: std::collections::HashSet<&str> = report
         .deps
         .iter()
@@ -545,13 +754,47 @@ pub fn print_doctor(
         .map(|d| d.id.as_str())
         .collect();
 
+    // Environment panel: os, detected installers, and detected tooling.
+    println!();
+    let installer_list = if installers.is_empty() {
+        "none detected".to_string()
+    } else {
+        installers.join(", ")
+    };
+    let mut present_list: Vec<&str> = present.iter().copied().collect();
+    present_list.sort_unstable();
+    let tooling = if present_list.is_empty() {
+        "none detected".to_string()
+    } else {
+        present_list.join(", ")
+    };
+    let env_label_w = "installers".len();
+    let env_rows = vec![
+        format!(
+            "{:<env_label_w$}  {}",
+            "os",
+            theme::accent(format!("{:?}", env.os))
+        ),
+        format!(
+            "{:<env_label_w$}  {}",
+            "installers",
+            theme::accent(&installer_list)
+        ),
+        format!("{:<env_label_w$}  {}", "tooling", theme::accent(&tooling)),
+    ];
+    print_panel("environment", None, &env_rows);
+
+    // Detected components. The mark reflects whether the tool's required
+    // dependencies are present, not merely that the component was detected.
+
     println!();
     if scan.components.is_empty() && scan.unrecognized.is_empty() {
         println!(
             "  {}",
-            style("No generated components detected in this directory.").dim()
+            theme::dim("No generated components detected in this directory.")
         );
     } else {
+        let mut table = borderless_table();
         for comp in &scan.components {
             let tool = registry.get(&comp.tool_id);
             let name = tool.map(|t| t.name.as_str()).unwrap_or(&comp.tool_id);
@@ -565,39 +808,33 @@ pub fn print_doctor(
                 })
                 .unwrap_or_default();
 
-            if missing.is_empty() {
-                println!(
-                    "  {} {}: {}",
-                    style("✔").green().bold(),
-                    comp.kind,
-                    style(name).cyan()
-                );
+            let (mark, note) = if missing.is_empty() {
+                (theme::ok().to_string(), String::new())
             } else {
-                println!(
-                    "  {} {}: {} {}",
-                    style("✘").red().bold(),
-                    comp.kind,
-                    style(name).cyan(),
-                    style(format!("(missing: {})", missing.join(", "))).yellow()
-                );
-            }
+                (
+                    theme::caution().to_string(),
+                    theme::warn(format!("missing: {}", missing.join(", "))).to_string(),
+                )
+            };
+            table.add_row(vec![
+                mark,
+                format!("{}:", comp.kind),
+                theme::accent(name).to_string(),
+                note,
+            ]);
         }
         for un in &scan.unrecognized {
-            println!(
-                "  {} {}/ — unrecognized (renamed or modified?)",
-                style("?").yellow().bold(),
-                un.dir
-            );
+            table.add_row(vec![
+                theme::unknown().to_string(),
+                format!("{}/", un.dir),
+                theme::dim("unrecognized (renamed or modified?)").to_string(),
+                String::new(),
+            ]);
         }
+        print_table(table, theme::PAD);
     }
 
-    // Dependency status.
-    println!();
-    for dep in &report.deps {
-        if dep.present {
-            println!("  {} {}", style("✔").green().bold(), dep.id);
-        }
-    }
+    // Missing-dependency advice (present tooling is shown in the panel above).
     print_dep_advice(report);
     println!();
 }
@@ -616,21 +853,28 @@ pub fn print_list(registry: &Registry, format: Format) {
     }
 
     println!();
-    println!("  {}", style("Roles").bold().underlined());
+    print_rule("Roles");
     println!();
+    let mut roles_table = borderless_table();
+    roles_table.set_header(vec![
+        theme::dim("ROLE").to_string(),
+        theme::dim("DESCRIPTION").to_string(),
+        theme::dim("DIR").to_string(),
+        theme::dim("").to_string(),
+    ]);
     for role in view::role_views() {
-        let multi = if role.multiple { "  (multiple)" } else { "" };
-        println!(
-            "  {:<16}{:<18}{}{}",
-            style(role.id).cyan(),
-            role.display,
-            style(format!("dir: {}", role.dir)).dim(),
-            style(multi).dim()
-        );
+        let multi = if role.multiple { "(multiple)" } else { "" };
+        roles_table.add_row(vec![
+            theme::accent(role.id).to_string(),
+            role.display.to_string(),
+            theme::dim(role.dir).to_string(),
+            theme::dim(multi).to_string(),
+        ]);
     }
+    print_table(roles_table, theme::PAD);
 
     println!();
-    println!("  {}", style("Tools").bold().underlined());
+    print_rule("Tools");
     // Reuse the same per-tool block as `--help` so the two can't drift; sort by
     // id to match the JSON ordering.
     let mut tools: Vec<&crate::registry::types::ToolDef> = registry.all_tools().iter().collect();
