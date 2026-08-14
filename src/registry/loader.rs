@@ -346,9 +346,9 @@ mod tests {
 
     #[test]
     fn load_tool_count() {
-        // aiken, plinth, scalus, meshjs, evolution, yaci, blaster + infra: kupo,
-        // ogmios, dolos, tx-submit-api, cardano-node, cardano-node-api, dingo
-        assert_eq!(registry().all_tools().len(), 14);
+        // aiken, plinth, scalus, meshjs, evolution, tx3, yaci, blaster + infra:
+        // kupo, ogmios, dolos, tx-submit-api, cardano-node, cardano-node-api, dingo
+        assert_eq!(registry().all_tools().len(), 15);
     }
 
     #[test]
@@ -379,7 +379,7 @@ mod tests {
         let off_chain = reg.tools_for_role(Role::OffChain);
         let mut ids: Vec<&str> = off_chain.iter().map(|t| t.id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, vec!["evolution", "meshjs", "scalus"]);
+        assert_eq!(ids, vec!["evolution", "meshjs", "scalus", "tx3"]);
     }
 
     #[test]

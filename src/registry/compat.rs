@@ -247,6 +247,26 @@ mod tests {
     }
 
     #[test]
+    fn tx3_with_yaci_is_incompatible() {
+        let reg = registry();
+        let sel = vec![a(Role::OffChain, "tx3"), a(Role::Devnet, "yaci")];
+        let inc = check(&sel, &reg).expect("tx3 + yaci should be incompatible");
+        assert_eq!(inc.off_chain_id, "tx3");
+        assert!(inc.self_hosted);
+        assert!(inc.providers.iter().any(|p| p.id == "yaci"));
+        assert!(inc.compatible_providers.is_empty());
+    }
+
+    #[test]
+    fn tx3_with_incompatible_infra_is_incompatible() {
+        let reg = registry();
+        // Tx3 speaks TRP; Kupo can't serve it, and Tx3 self-hosts anyway.
+        let sel = vec![a(Role::OffChain, "tx3"), a(Role::Infrastructure, "kupo")];
+        let inc = check(&sel, &reg).expect("tx3 + kupo should be incompatible");
+        assert!(inc.providers.iter().any(|p| p.id == "kupo"));
+    }
+
+    #[test]
     fn compatible_devnet_saves_an_incompatible_infra() {
         let reg = registry();
         // Yaci feeds Evolution (Blockfrost); an extra Dolos infra doesn't break it.
@@ -267,6 +287,12 @@ mod tests {
             a(Role::Infrastructure, "cardano-node"),
         ];
         assert!(check(&sel, &reg).is_none());
+    }
+
+    #[test]
+    fn tx3_without_provider_is_compatible() {
+        let reg = registry();
+        assert!(check(&[a(Role::OffChain, "tx3")], &reg).is_none());
     }
 
     #[test]

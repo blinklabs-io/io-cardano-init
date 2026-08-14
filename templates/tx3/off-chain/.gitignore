@@ -1,0 +1,4 @@
+node_modules/
+# trix build artifacts + generated client + local devnet state.
+.tx3/
+.env.local

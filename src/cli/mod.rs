@@ -860,32 +860,31 @@ mod tests {
         assert!(res.is_ok(), "expected Ok, got {res:?}");
     }
 
-    /// InitArgs for a one-shot off-chain + infra run whose seams don't overlap
-    /// (Evolution speaks Blockfrost/Kupmios; Dolos serves only UTxORPC).
-    /// `ignore_warning` toggles the compat gate.
-    fn incompatible_provider_args(ignore_warning: bool) -> InitArgs {
+    /// InitArgs for a one-shot tx3 + devnet run (tx3 is experimental, so
+    /// allow_experimental is set); `ignore_warning` toggles the compat gate.
+    fn tx3_devnet_args(devnet: &str, ignore_warning: bool) -> InitArgs {
         InitArgs {
             name: Some("compat-demo".to_string()),
             on_chain: None,
-            off_chain: Some("evolution".to_string()),
+            off_chain: Some("tx3".to_string()),
             fullstack: None,
-            infra: vec!["dolos".to_string()],
-            devnet: None,
+            infra: vec![],
+            devnet: Some(devnet.to_string()),
             formal_methods: None,
             network: "preview".to_string(),
             nix: false,
-            allow_experimental: false,
+            allow_experimental: true,
             dry_run: true,
             ignore_warning,
         }
     }
 
     #[test]
-    fn incompatible_offchain_provider_is_gated() {
-        // Evolution (Blockfrost/Kupmios) + Dolos (UTxORPC) share no seam, so
-        // generation stops before any disk write.
+    fn incompatible_offchain_devnet_is_gated() {
+        // tx3 (TRP, self-hosted devnet) + yaci (Blockfrost) don't share a seam,
+        // so generation stops before any disk write.
         let registry = Registry::load().unwrap();
-        let err = run_init(incompatible_provider_args(false), &registry, Format::Json).unwrap_err();
+        let err = run_init(tx3_devnet_args("yaci", false), &registry, Format::Json).unwrap_err();
         assert_eq!(err.code(), "incompatible_tools");
         assert_eq!(err.exit_code(), 2);
         let ctx = err.context();
@@ -896,14 +895,14 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        assert_eq!(tools, vec!["evolution", "dolos"]);
+        assert_eq!(tools, vec!["tx3", "yaci"]);
     }
 
     #[test]
-    fn incompatible_offchain_provider_allowed_with_ignore_warning() {
+    fn incompatible_offchain_devnet_allowed_with_ignore_warning() {
         // --ignore-warning downgrades the stop to a warning and proceeds.
         let registry = Registry::load().unwrap();
-        let res = run_init(incompatible_provider_args(true), &registry, Format::Json);
+        let res = run_init(tx3_devnet_args("yaci", true), &registry, Format::Json);
         assert!(res.is_ok(), "expected Ok, got {res:?}");
     }
 

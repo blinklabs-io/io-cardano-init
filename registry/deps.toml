@@ -24,6 +24,15 @@ binaries = ["node"]
 docs = "https://nodejs.org/en/download"
 install = [{ brew = "node" }, { apt = "nodejs" }, { winget = "OpenJS.NodeJS" }, { nix = "nodejs" }]
 
+# The tx3 toolchain (trix, dolos, cshell, tx3c) — installed by `tx3up install`,
+# which bundles them under ~/.tx3. tx3up is a bootstrappable installer (like
+# aikup): the `[tx3up]` dep below provides it, so `doctor` installs tx3up first,
+# then runs `tx3up install` here.
+[tx3]
+binaries = ["trix"]
+docs = "https://docs.txpipe.io/tx3/installation"
+install = [{ tx3up = "" }]
+
 [aiken]
 binaries = ["aiken"]
 docs = "https://aiken-lang.org/installation-instructions"
@@ -69,6 +78,15 @@ install = [{ npm = "@aiken-lang/aikup" }, { curl = "https://install.aiken-lang.o
 binaries = ["cardano-up"]
 docs = "https://github.com/blinklabs-io/cardano-up"
 install = [{ go = "github.com/blinklabs-io/cardano-up/cmd/cardano-up@latest" }]
+
+# tx3up: the tx3 toolchain manager (provides the `tx3up` installer used by [tx3]).
+# `brew install txpipe/tap/tx3up` gets the binary; the curl script is the
+# cross-platform fallback. Running it installs only tx3up itself — the toolchain
+# lands via `tx3up install` (the [tx3] recipe).
+[tx3up]
+binaries = ["tx3up"]
+docs = "https://docs.txpipe.io/tx3/installation"
+install = [{ brew = "txpipe/tap/tx3up" }, { curl = "https://github.com/tx3-lang/tx3up/releases/latest/download/tx3up-installer.sh" }]
 
 [rustup]
 binaries = ["rustup"]

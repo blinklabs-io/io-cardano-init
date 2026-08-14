@@ -1,0 +1,34 @@
+[tool]
+id = "tx3"
+name = "Tx3"
+description = """\
+A language and toolchain for describing Cardano transactions. You write \
+transaction templates in `.tx3`, and `trix` compiles them and generates a \
+typed client (TypeScript, Rust, Go, or Python); the `tx3-sdk` runtime then \
+resolves, signs, and submits them against a TRP endpoint. Tx3 self-hosts its \
+own local devnet (Dolos, via `just dev`), so it doesn't use the project's \
+devnet role — it speaks TRP, not the Blockfrost API that Yaci serves. This \
+template ships the Gift Card example with a bundled ephemeral-devnet test \
+harness."""
+website = "https://docs.txpipe.io/tx3"
+languages = ["tx3", "typescript", "rust", "go", "python"]
+system_deps = ["node", "tx3"]
+nix_packages = []
+# A trix.toml is the tx3 project manifest — distinctive enough on its own (no
+# generic file like package.json to disambiguate).
+detect = [{ file = "trix.toml", contains = "family" }]
+# Verified end-to-end (create+redeem against Dolos 1.6) on the current stable
+# toolchain, but kept opt-in: tx3 is pre-1.0 (tii v1beta0) and its toolchain
+# isn't a nixpkgs package — it's installed via tx3up (curl/brew), outside the
+# nix/CI smoke path.
+experimental = true
+
+[roles.off-chain]
+template = "tx3/off-chain"
+
+# Tx3 reaches the chain over TRP (served by Dolos/Demeter), not Blockfrost, and
+# it bundles its own Dolos devnet — so a separate devnet (e.g. Yaci) is both
+# unused and incompatible. See registry::compat.
+[compat]
+consumes = ["trp"]
+self_contained_devnet = true

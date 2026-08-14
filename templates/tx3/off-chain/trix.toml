@@ -1,0 +1,13 @@
+[protocol]
+name = "giftcard"
+version = "0.1.0"
+description = "Gift Card off-chain (Tx3): mint + lock a gift-card token, then redeem to release the locked lovelace."
+main = "giftcard.tx3"
+
+[ledger]
+family = "cardano"
+
+# Generate a typed TypeScript client from the .tx3 protocol. Output lands under
+# .tx3/codegen/ts-client/giftcard/ (gitignored); regenerate with `just build`.
+[[codegen]]
+plugin = "ts-client"

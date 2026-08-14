@@ -1,0 +1,47 @@
+# Off-chain component (Tx3) — Gift Card
+# Part of {{ project_name }}.
+#
+# Tx3 describes transactions in `giftcard.tx3`; `trix` compiles them and
+# generates a typed TypeScript client, and the `tx3-sdk` runtime resolves/signs/
+# submits them against a TRP endpoint (Dolos/Demeter).
+#
+# Requires the tx3 toolchain (`trix`, `dolos`) on PATH or under ~/.tx3 — install
+# with `tx3up` (see `cardano-init doctor`). `build`/`test` also read the on-chain
+# `../blueprint/plutus.json`, so build the on-chain component first.
+
+# Install node deps only when needed (node_modules missing, or package.json newer).
+_install:
+    @if [ ! -d node_modules ] || [ package.json -nt node_modules ]; then npm install --no-fund --no-audit; fi
+
+# Compile the .tx3 protocol and (re)generate the typed TypeScript client under
+# .tx3/codegen/ts-client/ (gitignored).
+build: _install
+    trix build
+    trix codegen --plugin ts-client
+
+# End-to-end tests: each test boots its own throwaway Dolos devnet (via the
+# harness in devnet/utils.ts) and drives the generated client. Needs the `dolos`
+# binary (from tx3up, or set DOLOS_BIN) and ../blueprint/plutus.json.
+test: _install
+    trix codegen --plugin ts-client
+    npx vitest run
+
+# Start a local, self-hosted Dolos devnet (serves TRP on http://localhost:8164)
+# for interactive create/redeem. Long-running — Ctrl-C to stop. Tx3 self-hosts
+# its devnet, so it doesn't use the project's INDEXER_URL / Yaci.
+dev: _install
+    trix devnet
+
+# Create a gift card: mint a token named <token> and lock <lovelace> at the
+# redeem address. Resolves/submits against TRP_URL (see .env.example); prints the
+# redeem address to pass to `just redeem`.
+create token lovelace: _install
+    npx tsx src/cli.ts create {{ "{{token}}" }} {{ "{{lovelace}}" }}
+
+# Redeem the gift card locked at <locked> (a `txHash#index`, printed by `create`):
+# burn the token and release the locked lovelace.
+redeem locked: _install
+    npx tsx src/cli.ts redeem {{ "{{locked}}" }}
+
+clean:
+    rm -rf node_modules .tx3
