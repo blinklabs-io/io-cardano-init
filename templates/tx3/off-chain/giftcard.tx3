@@ -1,10 +1,5 @@
 // Gift Card — Tx3 off-chain protocol.
 //
-// Reference Tx3 implementation of the Gift Card example, mirroring the on-chain
-// validators (`gift_card` mint policy + `redeem` spend) that every on-chain
-// template in this repo compiles into `blueprint/plutus.json`, and the MeshJS /
-// Evolution off-chain templates.
-//
 // Creating a gift card mints one unique token and locks the gift lovelace at the
 // `redeem` script address. Redeeming burns that token and releases the locked
 // lovelace to whoever spends the UTxO.
@@ -20,20 +15,12 @@
 // (computed in `src/blueprint.ts` from `blueprint/plutus.json`), not baked in at
 // build time.
 //
-// The locked UTxO carries a VOID datum (`()` = Constr 0 []) — the validators
-// ignore the datum (`redeem`'s is `_datum: Option<Data>`; the mint never sees
-// it), so nothing is stored on-chain. The off-chain keeps the small bit of
-// state `redeem` needs (the seed + token name) client-side, exactly like the
-// canonical Aiken example (https://aiken-lang.org/example--gift-card), which
-// locks `Data.void()` and remembers the params off-chain.
-//
 // Redeemer CBOR layout (must match the Aiken blueprint):
 //   Action = Mint (Constr 0) | Burn (Constr 1)      // mint-policy redeemer
 //   redeem spend redeemer = unit (Constr 0 [])      // ignored on-chain
 
 env {
-    /// Policy id of the (parameterized) gift-card minting policy — also the mint
-    /// script's hash.
+    /// Policy id of the (parameterized) gift-card minting policy — also the mint script's hash.
     gift_policy: Bytes,
     /// Serialized (single-CBOR) bytes of the parameterized `gift_card` mint script.
     gift_script: Bytes,
@@ -50,9 +37,7 @@ party Owner;
 /// address derived from `redeem_script`.
 party Redeem;
 
-// Mint-policy redeemer. `Mint` is constructor 0, `Burn` is constructor 1 — the
-// order the on-chain `Action` type declares. (tx3 doesn't allow `///` doc
-// comments on a `type`.)
+// Mint-policy redeemer. `Mint` is constructor 0, `Burn` is constructor 1
 type Action {
     Mint,
     Burn,
@@ -62,8 +47,7 @@ type Action {
 /// with `gift_lovelace` at the redeem address.
 tx create(
     /// The UTxO consumed as the mint seed. Must equal the UTxO the `gift_card`
-    /// policy was parameterized with. Used whole for input selection — never
-    /// decomposed, so it sidesteps tx3's opaque `UtxoRef` (see src/blueprint.ts).
+    /// policy was parameterized with.
     seed: UtxoRef,
     /// Lovelace to lock at the redeem address alongside the token.
     gift_lovelace: Int,
@@ -82,7 +66,6 @@ tx create(
     output locked {
         to: Redeem,
         amount: AnyAsset(gift_policy, token_name, 1) + Ada(gift_lovelace),
-        // Void datum: nothing to store on-chain (validators ignore it).
         datum: (),
     }
 
@@ -142,7 +125,6 @@ tx redeem(
         Owner,
     }
 
-    // The burn is checked by the mint policy; the spend by the redeem validator.
     cardano::plutus_witness {
         version: 3,
         script: redeem_script,
