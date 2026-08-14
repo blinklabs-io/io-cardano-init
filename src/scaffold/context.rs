@@ -25,6 +25,9 @@ pub struct RoleContext {
     pub tool_name: String,
     pub language: String,
     pub dir: String,
+    /// The tool's official site/docs URL (registry `website`). Surfaced in the
+    /// generated `AGENTS.md` so agents jump straight to authoritative docs.
+    pub website: String,
 }
 
 /// One selected infrastructure provider, available to the shared cardano-up
@@ -35,6 +38,9 @@ pub struct RoleContext {
 pub struct InfraToolContext {
     pub tool_id: String,
     pub tool_name: String,
+    /// The provider's official site/docs URL (registry `website`), surfaced in
+    /// the generated `AGENTS.md`.
+    pub website: String,
     pub cardano_up_package: String,
     pub env: Vec<EnvMapping>,
 }
@@ -178,6 +184,7 @@ pub fn build_context(
             infra_tools.push(InfraToolContext {
                 tool_id: tool.id.clone(),
                 tool_name: tool.name.clone(),
+                website: tool.website.clone(),
                 cardano_up_package: infra.cardano_up_package.clone(),
                 env: infra.env.clone(),
             });
@@ -197,6 +204,7 @@ pub fn build_context(
                     tool_name: tool.name.clone(),
                     language: tool.languages.first().cloned().unwrap_or_default(),
                     dir: contract::DIR_PROTOCOL.to_string(),
+                    website: tool.website.clone(),
                 });
             }
             continue;
@@ -207,6 +215,7 @@ pub fn build_context(
             tool_name: tool.name.clone(),
             language: tool.languages.first().cloned().unwrap_or_default(),
             dir: assignment.role.dir().to_string(),
+            website: tool.website.clone(),
         };
         match assignment.role {
             Role::OnChain => on_chain = Some(rc),

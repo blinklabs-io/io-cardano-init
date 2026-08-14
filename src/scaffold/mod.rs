@@ -125,6 +125,8 @@ mod tests {
         // Base files
         assert!(dir.path().join("Justfile").is_file());
         assert!(dir.path().join("README.md").is_file());
+        assert!(dir.path().join("AGENTS.md").is_file());
+        assert!(dir.path().join("CLAUDE.md").is_file());
         assert!(dir.path().join(".gitignore").is_file());
         assert!(dir.path().join(".env").is_file());
 
@@ -145,6 +147,17 @@ mod tests {
         let readme = std::fs::read_to_string(dir.path().join("README.md")).unwrap();
         assert!(readme.contains("my-protocol"));
         assert!(readme.contains("Aiken"));
+
+        // AGENTS.md is rendered (no leftover Jinja) and tailored to the stack;
+        // CLAUDE.md imports it so Claude Code picks it up.
+        let agents = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert!(agents.contains("my-protocol"));
+        assert!(agents.contains("Aiken"));
+        assert!(agents.contains("cardano-dev-skills"));
+        assert!(!agents.contains("{{"));
+        assert!(!agents.contains("{%"));
+        let claude = std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+        assert!(claude.contains("@AGENTS.md"));
     }
 
     #[test]

@@ -186,6 +186,20 @@ pub fn plan(selection: &Selection, registry: &Registry) -> Result<FilePlan, Scaf
             source: TemplateSource::Base("README.md.jinja".into()),
             render: true,
         },
+        // Agent-context files. `AGENTS.md` is the canonical, cross-agent
+        // (Codex/Cursor/…) brief tailored to the selected stack; `CLAUDE.md`
+        // is a one-line `@AGENTS.md` import so Claude Code — which does not read
+        // AGENTS.md natively — picks it up too. See TECH_SPEC §6.1.
+        FileEntry {
+            dest: PathBuf::from("AGENTS.md"),
+            source: TemplateSource::Base("AGENTS.md.jinja".into()),
+            render: true,
+        },
+        FileEntry {
+            dest: PathBuf::from("CLAUDE.md"),
+            source: TemplateSource::Base("CLAUDE.md".into()),
+            render: false,
+        },
         FileEntry {
             dest: PathBuf::from(".gitignore"),
             source: TemplateSource::Base("gitignore".into()),
@@ -383,6 +397,8 @@ mod tests {
             .collect();
         assert!(dests.contains(&"Justfile"));
         assert!(dests.contains(&"README.md"));
+        assert!(dests.contains(&"AGENTS.md"));
+        assert!(dests.contains(&"CLAUDE.md"));
         assert!(dests.contains(&".gitignore"));
         assert!(dests.contains(&".env"));
     }
@@ -555,14 +571,14 @@ mod tests {
         ]);
         let plan = plan(&sel, &registry()).unwrap();
 
-        // base: 4 (Justfile, README, .gitignore, .env)
+        // base: 6 (Justfile, README, AGENTS.md, CLAUDE.md, .gitignore, .env)
         // blueprint/.gitkeep: 1
         // aiken on-chain: 4 (aiken.toml, Justfile, lib/helpers.ak, validators/giftcard.ak)
         // meshjs off-chain: 11 (package.json, tsconfig.json, Justfile, .env.example,
         //                       scripts/bundle-blueprint.mjs,
         //                       src/{contract,node,index,cli,contract.test,contract.integration.test}.ts)
-        // total: 20
-        assert_eq!(plan.entries.len(), 20);
+        // total: 22
+        assert_eq!(plan.entries.len(), 22);
     }
 
     #[test]
