@@ -20,10 +20,16 @@
 // (computed in `src/blueprint.ts` from `blueprint/plutus.json`), not baked in at
 // build time.
 //
-// Datum / redeemer CBOR layout (must match the Aiken blueprint):
-//   GiftDatum = Constr 0 [seed_tx: Bytes, seed_ix: Int, token: Bytes]
-//   Action    = Mint (Constr 0) | Burn (Constr 1)      // mint-policy redeemer
-//   redeem spend redeemer = unit (Constr 0 [])         // ignored on-chain
+// The locked UTxO carries a VOID datum (`()` = Constr 0 []) — the validators
+// ignore the datum (`redeem`'s is `_datum: Option<Data>`; the mint never sees
+// it), so nothing is stored on-chain. The off-chain keeps the small bit of
+// state `redeem` needs (the seed + token name) client-side, exactly like the
+// canonical Aiken example (https://aiken-lang.org/example--gift-card), which
+// locks `Data.void()` and remembers the params off-chain.
+//
+// Redeemer CBOR layout (must match the Aiken blueprint):
+//   Action = Mint (Constr 0) | Burn (Constr 1)      // mint-policy redeemer
+//   redeem spend redeemer = unit (Constr 0 [])      // ignored on-chain
 
 env {
     /// Policy id of the (parameterized) gift-card minting policy — also the mint
@@ -52,35 +58,15 @@ type Action {
     Burn,
 }
 
-// Inline datum carried by the locked gift-card UTxO. Records the seed reference
-// and token name so `redeem` can rebuild the parameterized scripts from just the
-// on-chain UTxO. The validator ignores it — burning the token is the auth.
-type GiftDatum {
-    seed_tx: Bytes,
-    seed_ix: Int,
-    token: Bytes,
-}
-
 /// Create a gift card: spend the seed UTxO, mint the unique token, and lock it
 /// with `gift_lovelace` at the redeem address.
 tx create(
     /// The UTxO consumed as the mint seed. Must equal the UTxO the `gift_card`
-    /// policy was parameterized with.
+    /// policy was parameterized with. Used whole for input selection — never
+    /// decomposed, so it sidesteps tx3's opaque `UtxoRef` (see src/blueprint.ts).
     seed: UtxoRef,
     /// Lovelace to lock at the redeem address alongside the token.
     gift_lovelace: Int,
-    // `seed_tx`/`seed_ix` are the seed's transaction id and output index,
-    // recorded in the datum below so `redeem` can rebuild the parameterized
-    // scripts from just the on-chain UTxO. They ARE redundant with `seed` — but
-    // deriving them from it (`seed.tx_hash` / `seed.output_index`) is not viable
-    // on the current toolchain: tx3c accepts `.tx_hash`/`.output_index`, yet the
-    // resolver's `UtxoRef` exposes `.txid`/`.index` (which don't compile), so a
-    // derived datum compiles but fails at resolve. Passing them explicitly is the
-    // workaround; collapse to `seed.<field>` once tx3 aligns the two names.
-    /// Transaction id of `seed` (bytes) — stored in the datum for `redeem`.
-    seed_tx: Bytes,
-    /// Output index of `seed` — stored in the datum for `redeem`.
-    seed_ix: Int,
 ) {
     input funding {
         from: Owner,
@@ -96,11 +82,8 @@ tx create(
     output locked {
         to: Redeem,
         amount: AnyAsset(gift_policy, token_name, 1) + Ada(gift_lovelace),
-        datum: GiftDatum {
-            seed_tx: seed_tx,
-            seed_ix: seed_ix,
-            token: token_name,
-        },
+        // Void datum: nothing to store on-chain (validators ignore it).
+        datum: (),
     }
 
     output {

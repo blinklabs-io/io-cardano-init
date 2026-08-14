@@ -47,12 +47,14 @@ export interface Seed {
     outputIndex: number;
 }
 
-/** The `env {}` values the generated tx3 client needs to resolve a gift-card tx. */
+/** The `env {}` values the generated tx3 client needs to resolve a gift-card tx.
+ *  The index signature makes it assignable to the SDK's `ArgMap` (`.env(...)`). */
 export interface GiftCardEnv {
     gift_policy: string;
     gift_script: string;
     redeem_script: string;
     token_name: string;
+    [key: string]: string;
 }
 
 /** Everything a caller needs to build + submit a gift-card transaction. */

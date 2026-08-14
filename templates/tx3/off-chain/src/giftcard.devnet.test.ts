@@ -56,14 +56,10 @@ async function configure(): Promise<Instance> {
 }
 
 function createTx(inst: Instance) {
-    const seed = inst.seedRef;
-    const [txHash, ix] = seed.split("#");
     return inst.client
         .create({
-            seed,
+            seed: inst.seedRef,
             gift_lovelace: GIFT_LOVELACE,
-            seed_tx: txHash,
-            seed_ix: Number(ix),
         } as unknown as CreateArgs)
         .env(inst.gc.env)
         .resolve()
