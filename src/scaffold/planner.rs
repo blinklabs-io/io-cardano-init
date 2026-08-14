@@ -782,6 +782,164 @@ mod tests {
         }
     }
 
+    /// The recipe name if `line` is a column-0 Justfile target header, else
+    /// `None`. A target header is `name [params]: [deps]` at column 0 —
+    /// distinguished from a `name := value` assignment and from `#` / `{% … %}`
+    /// (comment / Jinja) lines.
+    fn justfile_target_name(line: &str) -> Option<String> {
+        if line.is_empty() || line.starts_with(char::is_whitespace) {
+            return None; // recipe body or blank, not a header
+        }
+        let trimmed = line.trim_end();
+        if trimmed.starts_with('#') || trimmed.starts_with("{%") || trimmed.starts_with("{#") {
+            return None; // comment or Jinja control line
+        }
+        let colon = trimmed.find(':')?;
+        if trimmed[colon..].starts_with(":=") {
+            return None; // variable assignment, not a recipe
+        }
+        // The name is the first token before the ':' (params follow it).
+        trimmed[..colon]
+            .split_whitespace()
+            .next()
+            .map(str::to_string)
+    }
+
+    /// Parse a Justfile template's text into `target name -> recipe body lines`
+    /// (indentation stripped). Jinja control lines interleaved in a recipe
+    /// (e.g. the infra driver's `{%- for … %}`) are skipped; a blank line or
+    /// the next column-0 line ends a recipe.
+    fn justfile_targets(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut targets = std::collections::BTreeMap::new();
+        for (i, line) in lines.iter().enumerate() {
+            let Some(name) = justfile_target_name(line) else {
+                continue;
+            };
+            let mut body = Vec::new();
+            for l in &lines[i + 1..] {
+                if l.trim().is_empty() {
+                    break; // blank line terminates the recipe
+                }
+                if l.starts_with(char::is_whitespace) {
+                    body.push(l.trim().to_string()); // a command line
+                } else if l.trim_start().starts_with("{%") || l.trim_start().starts_with("{#") {
+                    continue; // Jinja control line inside the recipe — not a command
+                } else {
+                    break; // next column-0 line
+                }
+            }
+            targets.insert(name, body);
+        }
+        targets
+    }
+
+    /// Whether a recipe body carries no real work — every line is empty, a
+    /// comment, or merely prints a message (`echo` / `true`) after stripping
+    /// just's line prefixes (`@` silent, `-` ignore-error). A no-op `build`,
+    /// `test`, or `clean` is allowed (a tool with nothing to do still exposes
+    /// the target); a no-op `dev` is not (§7).
+    fn is_noop_recipe(body: &[String]) -> bool {
+        body.iter().all(|line| {
+            let cmd = line.trim_start_matches(['@', '-']).trim_start();
+            cmd.is_empty()
+                || cmd.starts_with('#')
+                || cmd == "echo"
+                || cmd.starts_with("echo ")
+                || cmd == "true"
+                || cmd == ":"
+        })
+    }
+
+    /// Contract-compliance test (issue #10): every component template must
+    /// honor the interface contract (§7) — expose `build`/`test`/`clean`
+    /// Justfile targets, and provide `dev` only for a genuine watch/daemon/
+    /// devnet mode (no no-op `dev`). Runs across every distinct template
+    /// referenced by the registry.
+    ///
+    /// This checks the statically-verifiable contract. That each component
+    /// *actually builds* standalone is the job of `just build`/`just test`
+    /// (the smoke matrix), deliberately not duplicated in a heuristic here
+    /// (cf. the doctor scope note, TECH_SPEC §9).
+    #[test]
+    fn every_template_satisfies_interface_contract() {
+        use std::collections::BTreeMap;
+
+        let reg = registry();
+
+        // Every distinct component template (role + fullstack), deduped by
+        // path — the infra driver template is shared across all infra tools.
+        // Value = an owning tool id, for clearer failure messages.
+        let mut templates: BTreeMap<String, String> = BTreeMap::new();
+        for tool in reg.all_tools() {
+            for cfg in tool.roles.values() {
+                templates
+                    .entry(cfg.template.clone())
+                    .or_insert_with(|| tool.id.clone());
+            }
+            if let Some(cfg) = &tool.fullstack {
+                templates
+                    .entry(cfg.template.clone())
+                    .or_insert_with(|| tool.id.clone());
+            }
+        }
+
+        for (template, owner) in &templates {
+            // Locate the Justfile the manifest emits (dest == "Justfile").
+            let manifest_key = format!("{template}/manifest.toml");
+            let data = TemplateAssets::get(&manifest_key)
+                .unwrap_or_else(|| panic!("template '{template}' ({owner}) missing manifest"));
+            let text = std::str::from_utf8(&data.data).expect("manifest must be UTF-8");
+            let manifest: ManifestToml = toml::from_str(text)
+                .unwrap_or_else(|e| panic!("manifest '{manifest_key}' failed to parse: {e}"));
+
+            let justfile = manifest
+                .files
+                .iter()
+                .find(|f| f.dest == "Justfile")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "template '{template}' ({owner}) emits no Justfile; the interface \
+                         contract requires build/test/clean targets (§7)"
+                    )
+                });
+
+            let jf_key = format!("{template}/{}", justfile.source);
+            let jf_data = TemplateAssets::get(&jf_key).unwrap_or_else(|| {
+                panic!("template '{template}' Justfile source '{jf_key}' missing")
+            });
+            let jf_text = std::str::from_utf8(&jf_data.data).expect("Justfile must be UTF-8");
+
+            let targets = justfile_targets(jf_text);
+
+            // Required, terminating, composable targets (§7).
+            for required in ["build", "test", "clean"] {
+                assert!(
+                    targets.contains_key(required),
+                    "template '{template}' ({owner}) Justfile is missing the required \
+                     '{required}' target (interface contract §7)"
+                );
+            }
+
+            // `dev` is optional, but present only for a real mode — no no-op dev.
+            if let Some(body) = targets.get("dev") {
+                assert!(
+                    !is_noop_recipe(body),
+                    "template '{template}' ({owner}) has a no-op 'dev' target; per §7 a \
+                     component exposes 'dev' only for a genuine watch/daemon/devnet mode"
+                );
+            }
+        }
+
+        // Guard the guard: make sure we actually iterated the templates (a
+        // silently-empty registry would vacuously pass everything above).
+        assert!(
+            templates.len() >= 8,
+            "expected to check every component template; only found {}",
+            templates.len()
+        );
+    }
+
     #[test]
     fn nix_false_excludes_flake() {
         let sel = selection(vec![RoleAssignment {
