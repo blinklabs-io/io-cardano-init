@@ -1,10 +1,8 @@
-use console::style;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 
-use super::CliError;
 use super::oneshot::validate_project_name;
-use super::output;
+use super::{CliError, output, theme};
 use crate::registry::loader::Registry;
 use crate::registry::types::{Network, Role, RoleAssignment, Selection};
 
@@ -158,11 +156,10 @@ fn select_tools(
                 if let Some(reason) = &disabled[idx - 1] {
                     println!(
                         "  {}",
-                        style(format!(
+                        theme::warn(format!(
                             "{} can't be selected here — {reason}",
                             tools[idx - 1].name
                         ))
-                        .yellow()
                     );
                     continue;
                 }
@@ -226,10 +223,11 @@ fn confirm_experimental(
 
     println!();
     println!(
-        "  {} {} {}",
-        style("⚠ Experimental:").yellow().bold(),
-        style(experimental_names.join(", ")).yellow().bold(),
-        style("— may be unstable or incomplete (rough edges, breaking changes).").yellow()
+        "  {} {} {} {}",
+        theme::warn_mark(),
+        theme::warn_strong("Experimental:"),
+        theme::warn_strong(experimental_names.join(", ")),
+        theme::warn("— may be unstable or incomplete (rough edges, breaking changes).")
     );
 
     let include = Confirm::with_theme(theme)
@@ -244,11 +242,10 @@ fn confirm_experimental(
     // Declined: drop every experimental assignment, keep the rest.
     println!(
         "  {}",
-        style(format!(
+        theme::dim(format!(
             "Skipping experimental: {}",
             experimental_names.join(", ")
         ))
-        .dim()
     );
     Ok(assignments
         .into_iter()

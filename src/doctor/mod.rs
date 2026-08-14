@@ -42,6 +42,17 @@ pub struct Step {
     pub command: String,
 }
 
+/// An alternative install method for a missing dep — a recipe method other than
+/// the one the recommended `plan` uses, so the user can choose. `available` is
+/// whether its installer is present on this host right now (an unavailable one
+/// needs its installer installed first).
+#[derive(Debug, Clone, Serialize)]
+pub struct AltMethod {
+    pub installer: Installer,
+    pub command: String,
+    pub available: bool,
+}
+
 /// The resolved status of a single dependency.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepStatus {
@@ -51,6 +62,11 @@ pub struct DepStatus {
     /// Ordered install steps for this host. Empty when present or unresolved.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub plan: Vec<Step>,
+    /// Other recipe methods beyond `plan` (available ones first, then those
+    /// needing an installer this host lacks). Lets the user pick a different
+    /// installer. Empty when present, or when the recipe offers no other method.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<AltMethod>,
     /// Docs URL — the universal fallback so advice is never empty (FR-20).
     /// Omitted only when the dep is already present.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +153,31 @@ fn resolve(
     Resolved::Unresolved
 }
 
+/// The recipe methods to offer as alternatives to the recommended `plan`: every
+/// method whose installer differs from the one `plan` settles on, ordered
+/// available-first (each keeping the recipe's preference order within its
+/// group). When `plan` is empty (unresolved), every method is offered — all
+/// flagged unavailable, since a present installer would have produced a plan.
+fn alt_methods(recipe: &DepRecipe, chosen: Option<Installer>, env: &Environment) -> Vec<AltMethod> {
+    let (mut available, mut needs_installer) = (Vec::new(), Vec::new());
+    for method in &recipe.install {
+        if Some(method.installer) == chosen {
+            continue;
+        }
+        let alt = AltMethod {
+            installer: method.installer,
+            command: method.installer.command(&method.arg),
+            available: env.installers.contains(&method.installer),
+        };
+        if alt.available {
+            available.push(alt);
+        } else {
+            needs_installer.push(alt);
+        }
+    }
+    available.into_iter().chain(needs_installer).collect()
+}
+
 /// Resolve all required dependencies into a `Report`. Dependencies are
 /// deduplicated and reported in a stable (sorted) order.
 pub fn resolve_all(required: &[String], catalog: &DepCatalog, env: &Environment) -> Report {
@@ -154,15 +195,18 @@ pub fn resolve_all(required: &[String], catalog: &DepCatalog, env: &Environment)
             all_required_present = false;
         }
 
-        let (plan, docs) = if present {
-            (Vec::new(), None)
+        let (plan, alternatives, docs) = if present {
+            (Vec::new(), Vec::new(), None)
         } else {
             let docs = recipe.map(|r| r.docs.clone());
             let plan = match resolve(&id, env, catalog, &HashSet::new()) {
                 Resolved::Plan(steps) => steps,
                 Resolved::Unresolved => Vec::new(),
             };
-            (plan, docs)
+            // Everything the recipe offers beyond the recommended plan.
+            let chosen = plan.last().map(|s| s.installer);
+            let alternatives = recipe.map_or_else(Vec::new, |r| alt_methods(r, chosen, env));
+            (plan, alternatives, docs)
         };
 
         deps.push(DepStatus {
@@ -170,6 +214,7 @@ pub fn resolve_all(required: &[String], catalog: &DepCatalog, env: &Environment)
             required: true,
             present,
             plan,
+            alternatives,
             docs,
         });
     }
@@ -278,6 +323,52 @@ mod tests {
         assert_eq!(
             aiken.docs.as_deref(),
             Some("https://aiken-lang.org/installation-instructions")
+        );
+    }
+
+    #[test]
+    fn alternatives_offer_other_methods_available_first() {
+        // sbt recipe = [brew, nix]. With only nix present: plan uses nix, and
+        // brew is offered as an alternative flagged unavailable.
+        let report = resolve_all(
+            &["sbt".to_string()],
+            &catalog(),
+            &env(&[Installer::Nix], &[]),
+        );
+        let sbt = status(&report, "sbt");
+        assert_eq!(sbt.plan[0].installer, Installer::Nix);
+        assert_eq!(sbt.alternatives.len(), 1);
+        assert_eq!(sbt.alternatives[0].installer, Installer::Brew);
+        assert!(!sbt.alternatives[0].available);
+        assert_eq!(sbt.alternatives[0].command, "brew install sbt");
+    }
+
+    #[test]
+    fn alternatives_sort_available_before_needs_installer() {
+        // just recipe = [brew, apt, cargo, nix]. With cargo + nix present: plan
+        // uses cargo (first available); the other available method (nix) is
+        // offered before the ones that still need their installer (brew, apt).
+        let report = resolve_all(
+            &["just".to_string()],
+            &catalog(),
+            &env(&[Installer::Cargo, Installer::Nix], &[]),
+        );
+        let just = status(&report, "just");
+        assert_eq!(just.plan[0].installer, Installer::Cargo);
+        // The chosen installer is never repeated as an alternative.
+        assert!(
+            just.alternatives
+                .iter()
+                .all(|a| a.installer != Installer::Cargo)
+        );
+        // First alternative is the other available installer.
+        assert_eq!(just.alternatives[0].installer, Installer::Nix);
+        assert!(just.alternatives[0].available);
+        // Unavailable ones come after and are flagged.
+        assert!(
+            just.alternatives
+                .iter()
+                .any(|a| a.installer == Installer::Brew && !a.available)
         );
     }
 

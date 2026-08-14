@@ -635,6 +635,7 @@ The two passes are what make a directly-usable installer win over bootstrapping 
     { "id": "aiken", "required": true,  "present": false,
       "plan": [ { "installer": "npm",   "command": "npm install -g @aiken-lang/aikup" },
                 { "installer": "aikup", "command": "aikup install" } ],
+      "alternatives": [ { "installer": "nix", "command": "nix profile install nixpkgs#aiken", "available": false } ],
       "docs": "https://aiken-lang.org/installation-instructions" }
   ]
 }}
@@ -643,6 +644,7 @@ The two passes are what make a directly-usable installer win over bootstrapping 
 (The `recommended`/soft-note tier carries no members today — see §9.1 — so the example lists only required deps. A recommended dep, if reintroduced, would appear with `"required": false` and a `reason`.)
 
 - `plan` = the ordered, possibly multi-step install sequence the resolver produced **for this host** (empty when present; omitted/empty with only `docs` when unresolved).
+- `alternatives` (additive) = the recipe's *other* install methods, so the user can pick a different installer. Each is `{ installer, command, available }` where `available` = that installer is present on this host now. Ordered available-first, then those needing their installer installed; the method already used by `plan` is excluded. Omitted when the dep is present or the recipe offers no other method. The presenter lists available ones as plain commands and tags the rest `requires <installer>`.
 - `required` distinguishes tiers; `all_required_present` ignores recommended deps. The presenter shows missing required deps prominently and recommended ones as a soft note with `reason`. `docs` is always available so advice is never empty (FR-20).
 - Doctor output is **host-dependent by design** (it reflects detected installers) and is **not** part of the byte-identical generation contract (§11). v1 prints the plan; v2 executes it (same data, same resolver).
 

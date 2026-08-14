@@ -1,6 +1,7 @@
 pub mod interactive;
 pub mod oneshot;
 pub mod output;
+pub mod theme;
 
 use std::path::PathBuf;
 
@@ -131,44 +132,77 @@ impl InitArgs {
 // CLI errors
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, thiserror::Error)]
+// `miette::Diagnostic` supplies the *human* rendering (framed title + `help:`
+// remedy + code, via the fancy handler installed in `run`). The inherent
+// `code()`/`context()`/`exit_code()` methods below remain the source of truth
+// for the JSON contract and exit dispatch — the `code(...)` slugs here mirror
+// them and must stay in sync.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
 pub enum CliError {
     #[error("{0}")]
+    #[diagnostic(code(cardano_init::registry_load))]
     Registry(#[from] RegistryError),
 
     #[error("{0}")]
+    #[diagnostic(code(cardano_init::scaffold_error))]
     Scaffold(#[from] ScaffoldError),
 
     #[error("{0}")]
+    #[diagnostic(code(cardano_init::web_bind))]
     Web(#[from] crate::web::WebError),
 
     #[error("{0}")]
+    #[diagnostic(code(cardano_init::registry_load))]
     Catalog(#[from] crate::doctor::catalog::CatalogError),
 
     #[error("directory '{}' already exists. Refusing to overwrite", path)]
+    #[diagnostic(
+        code(cardano_init::dir_exists),
+        help("choose a different --name, or remove/empty the existing directory.")
+    )]
     DirectoryExists { path: String },
 
-    #[error("unknown tool '{}' for role {}", tool_id, role)]
+    #[error("no tool named '{tool_id}' fills the {role} role")]
+    #[diagnostic(
+        code(cardano_init::unknown_tool),
+        help("valid {role} tools: {}", valid_tools.join(", ")),
+        url("https://github.com/input-output-hk/cardano-init#tools")
+    )]
     UnknownTool {
         tool_id: String,
         role: String,
         valid_tools: Vec<String>,
     },
 
-    #[error("tool '{}' does not support role '{}'", tool_id, role)]
+    #[error("tool '{tool_id}' does not support the '{role}' role")]
+    #[diagnostic(
+        code(cardano_init::tool_role_mismatch),
+        help("'{tool_id}' fills: {}", valid_roles.join(", ")),
+        url("https://github.com/input-output-hk/cardano-init#tools")
+    )]
     ToolRoleMismatch {
         tool_id: String,
         role: String,
         valid_roles: Vec<String>,
     },
 
-    #[error("no roles selected. At least one role must be provided")]
+    #[error("no roles selected")]
+    #[diagnostic(
+        code(cardano_init::no_roles_selected),
+        help("select at least one tool, or pass a one-shot flag like --on-chain aiken.")
+    )]
     NoRolesSelected,
 
     #[error(
-        "{} is experimental — it may be unstable or incomplete, so it's opt-in (expect rough edges and breaking changes).\n\n  To scaffold it anyway, re-run the same command with --allow-experimental, e.g.:\n\n    cardano-init --name <project> {} --allow-experimental",
-        labels.join(", "),
-        example_flags.join(" ")
+        "{} is experimental — it may be unstable or incomplete, so it's opt-in (expect rough edges and breaking changes)",
+        labels.join(", ")
+    )]
+    #[diagnostic(
+        code(cardano_init::experimental_not_allowed),
+        help(
+            "to scaffold it anyway, re-run with --allow-experimental:\n\n    cardano-init --name <project> {} --allow-experimental",
+            example_flags.join(" ")
+        )
     )]
     ExperimentalNotAllowed {
         /// Tool ids (machine-facing `context`).
@@ -180,46 +214,65 @@ pub enum CliError {
         example_flags: Vec<String>,
     },
 
-    #[error(
-        "tool '{}' does not support fullstack (no [fullstack] template)",
-        tool_id
+    #[error("tool '{tool_id}' does not support fullstack (no [fullstack] template)")]
+    #[diagnostic(
+        code(cardano_init::fullstack_unsupported),
+        help("fullstack-capable tools: {}", valid_tools.join(", "))
     )]
     FullstackUnsupported {
         tool_id: String,
         valid_tools: Vec<String>,
     },
 
-    #[error(
-        "--fullstack cannot be combined with --on-chain or --off-chain\n\n  --fullstack X already fills both roles; use it alone."
+    #[error("--fullstack cannot be combined with --on-chain or --off-chain")]
+    #[diagnostic(
+        code(cardano_init::fullstack_conflict),
+        help("--fullstack X already fills both roles; use it alone.")
     )]
     FullstackConflict,
 
     // Boxed to keep `CliError` small (this payload carries several strings).
-    #[error("{0}")]
+    // `transparent` delegates both Display and the diagnostic (code + `#[help]`)
+    // to the inner error.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     IncompatibleTools(Box<IncompatibleToolsError>),
 
-    #[error("invalid network '{}'. Expected preview, preprod, or mainnet", value)]
+    #[error("invalid network '{value}'")]
+    #[diagnostic(
+        code(cardano_init::invalid_network),
+        help("expected one of: preview, preprod, mainnet.")
+    )]
     InvalidNetwork { value: String },
 
-    #[error("invalid project name '{}' — {}", name, reason)]
+    #[error("invalid project name '{name}' — {reason}")]
+    #[diagnostic(code(cardano_init::invalid_project_name))]
     InvalidProjectName { name: String, reason: String },
 
-    #[error(
-        "--name is required when using one-shot flags (--on-chain, --off-chain, etc.)\n\n  Run without flags for interactive mode, or provide --name:\n\n    cardano-init --name my-protocol --on-chain aiken"
+    #[error("--name is required when using one-shot flags (--on-chain, --off-chain, etc.)")]
+    #[diagnostic(
+        code(cardano_init::name_required),
+        help(
+            "run without flags for interactive mode, or provide --name:\n\n    cardano-init --name my-protocol --on-chain aiken"
+        )
     )]
     NameRequired,
 
     #[error("user aborted")]
+    #[diagnostic(code(cardano_init::aborted))]
     Aborted,
 
     #[error("prompt error: {0}")]
+    #[diagnostic(code(cardano_init::prompt_error))]
     Prompt(#[from] dialoguer::Error),
 }
 
 /// Payload for [`CliError::IncompatibleTools`] — boxed in the variant so
 /// `CliError` stays small (an off-chain ↔ provider mismatch carries several
 /// strings for both the human message and the JSON context).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error("{off_chain} can't be paired with {providers} — {reason}")]
+#[diagnostic(code(cardano_init::incompatible_tools))]
 pub struct IncompatibleToolsError {
     /// Human label `Name (id)` for the off-chain tool.
     pub off_chain: String,
@@ -227,7 +280,9 @@ pub struct IncompatibleToolsError {
     pub providers: String,
     /// Why the pair can't talk (seam mismatch / self-hosting).
     pub reason: String,
-    /// Pre-formatted multi-line remedy (which providers / off-chain tools fit).
+    /// Pre-formatted multi-line remedy (which providers / off-chain tools fit,
+    /// plus the `--ignore-warning` escape hatch); surfaced as the `help:` line.
+    #[help]
     pub help: String,
     /// Machine-facing ids `[off_chain_id, provider_ids…]` (JSON context).
     pub ids: Vec<String>,
@@ -235,16 +290,6 @@ pub struct IncompatibleToolsError {
     pub compatible_providers: Vec<String>,
     /// Off-chain ids compatible with the chosen providers (JSON context).
     pub compatible_off_chain: Vec<String>,
-}
-
-impl std::fmt::Display for IncompatibleToolsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} can't be paired with {} — {}.\n\n{}\n\n  To scaffold this combination anyway, re-run with --ignore-warning.",
-            self.off_chain, self.providers, self.reason, self.help
-        )
-    }
 }
 
 impl CliError {
@@ -354,18 +399,15 @@ impl CliError {
 // Tool catalog for --help
 // ---------------------------------------------------------------------------
 
-/// Build the "Available tools" section appended to --help output.
-fn build_tool_catalog(registry: &Registry) -> String {
+/// Build the section appended to --help: a pointer to `list` for the tool
+/// catalog (kept out of --help to avoid a wall of text), plus usage examples.
+fn build_help_footer() -> String {
     use std::fmt::Write;
 
-    let mut out = String::from("Available tools:\n");
+    let mut out =
+        String::from("Run 'cardano-init list' to see the tools available for each role.\n\n");
 
-    for tool in registry.all_tools() {
-        out.push('\n');
-        format_tool(&mut out, tool);
-    }
-
-    let _ = writeln!(out, "\nExamples:");
+    let _ = writeln!(out, "Examples:");
     let _ = writeln!(
         out,
         "  cardano-init                                        # interactive mode"
@@ -438,14 +480,15 @@ pub fn run() -> i32 {
             // Registry load happens before we know the requested format; this
             // is a packaging bug (embedded data), so default to human output.
             let err = CliError::from(e);
-            output::print_error(&err, Format::Human);
-            return err.exit_code();
+            let code = err.exit_code();
+            output::print_error(err, Format::Human);
+            return code;
         }
     };
 
-    // Build clap command with dynamic after_help containing tool catalog
-    let catalog = build_tool_catalog(&registry);
-    let cmd = Cli::command().after_help(catalog);
+    // Append usage examples + a pointer to `list` (the tool catalog lives there,
+    // not in --help).
+    let cmd = Cli::command().after_help(build_help_footer());
     let matches = cmd.get_matches();
     let cli = Cli::from_arg_matches(&matches).expect("clap already validated");
     let format = cli.format;
@@ -463,8 +506,9 @@ pub fn run() -> i32 {
     match result {
         Ok(()) => 0,
         Err(e) => {
-            output::print_error(&e, format);
-            e.exit_code()
+            let code = e.exit_code();
+            output::print_error(e, format);
+            code
         }
     }
 }
@@ -501,20 +545,22 @@ fn incompatible_tools_error(inc: crate::registry::compat::Incompatibility) -> Cl
         .collect();
     let providers_text = provider_labels.join(", ");
 
+    // These lines feed the diagnostic's `help:` field; miette owns the
+    // indentation, so they carry none of their own.
     let providers_line = if !inc.compatible_providers.is_empty() {
         format!(
-            "  Providers that work with {}: {}",
+            "Providers that work with {}: {}",
             inc.off_chain_name,
             inc.compatible_providers.join(", ")
         )
     } else if inc.self_hosted {
         format!(
-            "  {} provides its own devnet — omit the provider selection.",
+            "{} provides its own devnet — omit the provider selection.",
             inc.off_chain_name
         )
     } else {
         format!(
-            "  No bundled provider serves {} — point it at a public provider (see its README).",
+            "No bundled provider serves {} — point it at a public provider (see its README).",
             inc.off_chain_name
         )
     };
@@ -522,7 +568,7 @@ fn incompatible_tools_error(inc: crate::registry::compat::Incompatibility) -> Cl
         String::new()
     } else {
         format!(
-            "\n  Off-chain tools that work with {}: {}",
+            "\nOff-chain tools that work with {}: {}",
             providers_text,
             inc.compatible_off_chain.join(", ")
         )
@@ -535,11 +581,38 @@ fn incompatible_tools_error(inc: crate::registry::compat::Incompatibility) -> Cl
         off_chain: format!("{} ({})", inc.off_chain_name, inc.off_chain_id),
         providers: providers_text,
         reason: inc.reason,
-        help: format!("{providers_line}{off_chain_line}"),
+        help: format!(
+            "{providers_line}{off_chain_line}\n\nTo scaffold this combination anyway, re-run with --ignore-warning."
+        ),
         ids,
         compatible_providers: inc.compatible_providers,
         compatible_off_chain: inc.compatible_off_chain,
     }))
+}
+
+/// Run `work` while showing a transient spinner labelled `message`, clearing it
+/// before returning. The spinner is shown only for **human, attended** (TTY)
+/// output — under `--format json` or when piped it would corrupt the stream, so
+/// `work` runs plainly. indicatif draws to stderr, keeping stdout clean either
+/// way. Scoped to genuinely latency-bearing work (system probing / dep
+/// resolution), not near-instant steps (clig.dev: no fake progress).
+fn with_spinner<T>(message: &str, format: Format, work: impl FnOnce() -> T) -> T {
+    use indicatif::{ProgressBar, ProgressStyle};
+
+    if format != Format::Human || !console::user_attended() {
+        return work();
+    }
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("  {spinner:.cyan} {msg}")
+            .expect("static spinner template is valid"),
+    );
+    pb.set_message(message.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+    let result = work();
+    pb.finish_and_clear();
+    result
 }
 
 /// Run the standalone `doctor`: scan the current directory for generated
@@ -552,8 +625,11 @@ fn run_doctor(registry: &Registry, format: Format) -> Result<(), CliError> {
     let scan = probe::scan_project(&cwd, registry);
 
     let required = required_deps(scan.components.iter().map(|c| c.tool_id.as_str()), registry);
-    let env = probe::detect_environment(&catalog);
-    let report = doctor::resolve_all(&required, &catalog, &env);
+    let (env, report) = with_spinner("Probing environment…", format, || {
+        let env = probe::detect_environment(&catalog);
+        let report = doctor::resolve_all(&required, &catalog, &env);
+        (env, report)
+    });
 
     output::print_doctor(&scan, &report, &env, registry, format);
     Ok(())
@@ -663,13 +739,18 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
         return Ok(());
     }
 
-    if format == Format::Human {
-        output::print_summary(&selection, registry);
-    }
-    crate::scaffold::scaffold(&selection, registry, &root)?;
+    // No pre-generation summary here: interactive mode already showed the panel
+    // at its confirm step, and the one-shot path goes straight to the success
+    // panel (same rows + a CREATED badge), so a separate preview would just
+    // duplicate it.
+    with_spinner("Scaffolding project…", format, || {
+        crate::scaffold::scaffold(&selection, registry, &root)
+    })?;
 
     // Check-and-advise: resolve the deps this selection needs (TECH_SPEC §9).
-    let report = resolve_selection_deps(&selection, registry)?;
+    let report = with_spinner("Checking dependencies…", format, || {
+        resolve_selection_deps(&selection, registry)
+    })?;
     output::print_success(&selection, registry, &report, format);
 
     Ok(())
@@ -833,14 +914,29 @@ mod tests {
         assert_eq!(tools, vec!["blaster"]);
         assert_eq!(ctx["remedy"], "--allow-experimental");
 
-        // The human message names the tool (name + id) and shows a copy-pasteable
-        // opt-in command with the exact role flag.
+        // The human message names the tool (name + id); the copy-pasteable opt-in
+        // command (with the exact role flag) is the diagnostic's `help:` line.
         let msg = err.to_string();
         assert!(msg.contains("Blaster (blaster)"), "message: {msg}");
+        let help = miette::Diagnostic::help(&err)
+            .map(|h| h.to_string())
+            .unwrap_or_default();
         assert!(
-            msg.contains("--formal-methods blaster --allow-experimental"),
-            "message: {msg}"
+            help.contains("--formal-methods blaster --allow-experimental"),
+            "help: {help}"
         );
+    }
+
+    #[test]
+    fn diagnostic_code_mirrors_inherent_code() {
+        // The miette `#[diagnostic(code(...))]` slug (drives the human display)
+        // must stay in sync with the inherent `code()` (the JSON contract): the
+        // derive slug is the inherent slug under the `cardano_init::` namespace.
+        let err = CliError::NameRequired;
+        let diag = miette::Diagnostic::code(&err)
+            .map(|c| c.to_string())
+            .expect("variant declares a diagnostic code");
+        assert_eq!(diag, format!("cardano_init::{}", err.code()));
     }
 
     #[test]

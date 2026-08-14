@@ -303,8 +303,8 @@ pub fn serve(registry: &Registry, port: u16) -> Result<(), WebError> {
     let url = format!("http://{addr}");
     println!(
         "\n  {} serving at {}\n  Press Ctrl+C to stop.\n",
-        console::style("cardano-init web").bold(),
-        console::style(&url).cyan().underlined(),
+        crate::cli::theme::strong("cardano-init web"),
+        crate::cli::theme::accent(&url).underlined(),
     );
 
     // Pre-build registry JSON once (served on every /api/registry request)
