@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use super::oneshot::{validate_fullstack_tool, validate_tool_for_role};
-use super::{AddArgs, CliError, EditArgs, Format, RemoveArgs, UpdateFlags, output, theme};
+use super::{AddArgs, CliError, Format, RemoveArgs, UpdateFlags, output, theme};
 use crate::doctor::probe;
 use crate::registry::loader::Registry;
 use crate::registry::types::{Role, RoleAssignment, Selection};
@@ -80,25 +80,6 @@ pub fn run_remove(args: RemoveArgs, registry: &Registry, format: Format) -> Resu
     let cwd = current_dir();
     let old = detect_selection(&cwd, registry, format)?;
     let new = update::apply_all(&old, &mutations);
-    finish_update(&cwd, old, new, &args.flags, registry, format)
-}
-
-/// `cardano-init edit` — re-open the interactive selector, pre-filled from the
-/// detected stack, and apply the resulting change.
-pub fn run_edit(args: EditArgs, registry: &Registry, format: Format) -> Result<(), CliError> {
-    let cwd = current_dir();
-    let old = detect_selection(&cwd, registry, format)?;
-
-    // The interactive selector seeds its defaults from the current selection;
-    // the project name stays fixed (editing tooling, not renaming).
-    let mut new = super::interactive::run_interactive_seeded(
-        registry,
-        Some(&old),
-        args.flags.allow_experimental,
-        args.flags.ignore_warning,
-    )?;
-    new.project_name = old.project_name.clone();
-
     finish_update(&cwd, old, new, &args.flags, registry, format)
 }
 
@@ -208,7 +189,7 @@ fn finish_update(
     }
 
     // Git safety net: the change must be reviewable/revertible.
-    if !flags.force && !worktree_is_clean(cwd) {
+    if !flags.force && !super::git::is_clean(cwd) {
         return Err(CliError::WorktreeDirty {
             path: cwd.display().to_string(),
         });
@@ -227,20 +208,6 @@ fn finish_update(
     let report = super::resolve_selection_deps(&new, registry)?;
     output::print_update_success(&new, registry, &plan, &report, format);
     Ok(())
-}
-
-/// Whether the git working tree at `root` is clean. A missing `git`, a non-repo,
-/// or any error is treated as "not clean" (so `--force` is required).
-fn worktree_is_clean(root: &Path) -> bool {
-    match std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["status", "--porcelain"])
-        .output()
-    {
-        Ok(out) if out.status.success() => out.stdout.is_empty(),
-        _ => false,
-    }
 }
 
 fn confirm(prompt: &str, default: bool) -> Result<bool, CliError> {

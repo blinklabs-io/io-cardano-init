@@ -25,10 +25,9 @@ cardano-init doctor                  # check this project's dependencies + advis
 cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 cardano-init add [ROLE_FLAGS]        # add/swap tools in the project in the cwd (see proposal)
 cardano-init remove [ROLE_FLAGS]     # remove a role / infra provider from the cwd project
-cardano-init edit                    # interactive: re-open the selector, seeded from the cwd project
 ```
 
-The `add`/`remove`/`edit` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix live in `docs/proposals/updating-project-tooling.md`.
+The `add`/`remove` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix live in `docs/proposals/updating-project-tooling.md`.
 
 `--format human|json` (planned) is a global flag; default `human`. `json` **implies non-interactive**: it never prompts; if required input is missing it errors instead.
 

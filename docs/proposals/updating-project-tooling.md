@@ -2,7 +2,7 @@
 
 **Status:** Accepted · **Last updated:** 2026-08-15 · **Owner:** Robertino Martinez
 
-> **Implemented.** `cardano-init add`/`remove`/`edit` ship this design: reconstruction in `doctor::probe::reconstruct`, the pure change-set in `scaffold::update`, the writer in `scaffold::writer::apply_update`, and the CLI edge in `cli::update`. See PRD FR-25 and TECH_SPEC §2.1/§2.5.
+> **Implemented.** `cardano-init add`/`remove` ship this design: reconstruction in `doctor::probe::reconstruct`, the pure change-set in `scaffold::update`, the writer in `scaffold::writer::apply_update`, and the CLI edge in `cli::update`. See PRD FR-25 and TECH_SPEC §2.1/§2.5. The interactive `edit` command in §9 was **dropped** as low-value — `add`/`remove` (with `--dry-run`) cover the need.
 
 > Closes the exploration in [#26](https://github.com/input-output-hk/cardano-init/issues/26). This proposal owns the *design* for editing an already-generated project's role/tool set. It builds on the interface contract (ARCHITECTURE §4 / TECH_SPEC §7), the scaffolding pipeline (ARCHITECTURE §6), and the doctor project scan (TECH_SPEC §9.6). Where behavior is not yet in code it is **(planned)**.
 
@@ -152,17 +152,16 @@ The current writer is a blind, non-atomic `fs::write` loop that assumes an empty
 ## 9. CLI surface
 
 ```
-cardano-init edit                      # interactive: re-open the selector, seeded from the reconstructed selection
 cardano-init add    --off-chain tx3    # one-shot: add/replace a slot (same flag vocabulary as init)
 cardano-init add    --infra ogmios     # repeatable; dedup keep-first
 cardano-init remove --off-chain        # one-shot: drop a role (by role, not tool)
 cardano-init remove --infra kupo       # drop one infra provider
 ```
 
-- `edit` reuses the whole interactive stack (`cli/interactive.rs`), pre-checking the reconstructed selection so the diff is "toggle what you want."
 - `add`/`remove` reuse `oneshot`'s per-role flag parsing and validation verbatim.
 - Global flags honored: `--dry-run`, `--ignore-warning`, `--allow-experimental`, `--format`, plus new `--force`.
 - Deliberately **not** verbs like `swap`: an `add --off-chain X` onto an occupied off-chain slot *is* the swap (REPLACE), reported as such in the diff so it is never silent.
+- An interactive `edit` (re-open the selector seeded from the detected stack) was considered and **dropped** as low-value: `add`/`remove --dry-run` already cover editing the stack, and `edit` duplicated the whole interactive stack for little gain.
 
 ---
 
@@ -225,7 +224,7 @@ No new dependency on `cli/` from the core; the `Role` vocabulary and the contrac
 
 ## 13. Phasing
 
-1. **Reconstruction + `--dry-run` diff** — `reconstruct()`, the change-set computer, and a read-only `edit --dry-run` that prints `S_old`/`S_new`/diff. No writes; independently useful and testable, and improves `doctor`'s infra reporting for free.
+1. **Reconstruction + `--dry-run` diff** — `reconstruct()`, the change-set computer, and a read-only `add`/`remove --dry-run` that prints `S_old`/`S_new`/diff. No writes; independently useful and testable, and improves `doctor`'s infra reporting for free.
 2. **`add` (non-destructive)** — CREATE + shared re-wire + infra RE-RENDER, git-gated. Covers "expand scope" and "add infra" with no deletions.
 3. **`remove` / swap (destructive)** — REMOVE/REPLACE + fusion transitions, behind git-clean + confirm.
 

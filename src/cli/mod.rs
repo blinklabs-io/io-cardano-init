@@ -1,3 +1,4 @@
+pub mod git;
 pub mod interactive;
 pub mod oneshot;
 pub mod output;
@@ -61,10 +62,6 @@ pub enum Command {
     /// Remove a role (or an infrastructure provider) from the project in the
     /// current directory
     Remove(RemoveArgs),
-
-    /// Edit the project in the current directory interactively (re-open the
-    /// selector, pre-filled from the detected stack)
-    Edit(EditArgs),
 }
 
 /// Flags shared by the update commands (add / remove / edit).
@@ -149,13 +146,6 @@ pub struct RemoveArgs {
     pub flags: UpdateFlags,
 }
 
-/// Arguments for `edit` (interactive).
-#[derive(clap::Args, Debug)]
-pub struct EditArgs {
-    #[command(flatten)]
-    pub flags: UpdateFlags,
-}
-
 /// Arguments for the default init mode (interactive or one-shot).
 #[derive(clap::Args, Debug)]
 pub struct InitArgs {
@@ -172,8 +162,7 @@ pub struct InitArgs {
     pub off_chain: Option<String>,
 
     /// Fullstack tool for both on-chain and off-chain, as one `protocol/`
-    /// component (e.g. scalus). Sugar for --on-chain X --off-chain X; the tool
-    /// must declare a [fullstack] template. Not combinable with --on-chain/--off-chain.
+    /// Not combinable with --on-chain/--off-chain
     #[arg(long, value_name = "TOOL_ID")]
     pub fullstack: Option<String>,
 
@@ -197,9 +186,7 @@ pub struct InitArgs {
     #[arg(long)]
     pub nix: bool,
 
-    /// Opt in to experimental tools (not yet build-green). Required to select an
-    /// experimental tool in one-shot/JSON mode; pre-acknowledges the interactive
-    /// confirm.
+    /// Opt in to experimental tools
     #[arg(long)]
     pub allow_experimental: bool,
 
@@ -208,8 +195,6 @@ pub struct InitArgs {
     pub dry_run: bool,
 
     /// Scaffold a combination the compatibility check flags as incompatible
-    /// (e.g. an off-chain tool and a devnet that can't talk). Downgrades the
-    /// stop-generation error to a warning.
     #[arg(long)]
     pub ignore_warning: bool,
 }
@@ -652,7 +637,6 @@ pub fn run() -> i32 {
         }
         Some(Command::Add(args)) => update::run_add(args, &registry, format),
         Some(Command::Remove(args)) => update::run_remove(args, &registry, format),
-        Some(Command::Edit(args)) => update::run_edit(args, &registry, format),
         None => run_init(cli.init, &registry, format),
     };
 
@@ -911,11 +895,16 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
         crate::scaffold::scaffold(&selection, registry, &root)
     })?;
 
+    // Give the new project a git repo + initial commit, so `add`/`remove`/`edit`
+    // have a clean tree to diff against out of the box. Best-effort: skips when
+    // git is absent or we're already inside a repo, never fails generation.
+    let git = git::init_project_repo(&root);
+
     // Check-and-advise: resolve the deps this selection needs (TECH_SPEC §9).
     let report = with_spinner("Checking dependencies…", format, || {
         resolve_selection_deps(&selection, registry)
     })?;
-    output::print_success(&selection, registry, &report, format);
+    output::print_success(&selection, registry, &report, git, format);
 
     Ok(())
 }

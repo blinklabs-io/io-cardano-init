@@ -574,7 +574,13 @@ fn print_tree(paths: &[Vec<&str>], depth: usize, _start: usize, indent: &mut Str
 /// Print success after scaffolding, including the dependency check-and-advise
 /// (TECH_SPEC §9). In `json`, emits one envelope carrying the selection plus the
 /// dependency report.
-pub fn print_success(selection: &Selection, registry: &Registry, report: &Report, format: Format) {
+pub fn print_success(
+    selection: &Selection,
+    registry: &Registry,
+    report: &Report,
+    git: crate::cli::git::InitOutcome,
+    format: Format,
+) {
     if format == Format::Json {
         emit_json_ok(json!({
             "project": selection.project_name,
@@ -582,6 +588,7 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
             "nix": selection.nix,
             "generated": true,
             "components": components_json(selection, registry),
+            "git": git.as_str(),
             "dependencies": report,
         }));
         return;
@@ -600,6 +607,8 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
     // Reiterate the experimental caveat after generation (a one-shot user may
     // not have seen the pre-generation summary warning scroll past).
     print_experimental_warning(selection, registry);
+
+    print_git_note(git);
 
     // Check-and-advise: surface any missing required deps before "Next steps".
     print_dep_advice(report);
@@ -792,6 +801,28 @@ pub fn print_update_success(
         theme::command("just build")
     );
     println!();
+}
+
+/// Note the git repo status after generation (human output). Silent when the
+/// project was created inside an existing repository.
+fn print_git_note(git: crate::cli::git::InitOutcome) {
+    use crate::cli::git::InitOutcome;
+    println!();
+    match git {
+        InitOutcome::Committed => println!(
+            "  {}  git repository initialized with an initial commit",
+            theme::badge_ok("GIT")
+        ),
+        InitOutcome::InitializedNoCommit => println!(
+            "  {}  git repository initialized — set git user.name/user.email, then commit",
+            theme::badge_warn("GIT")
+        ),
+        InitOutcome::GitMissing => println!(
+            "  {}",
+            theme::dim("git not found — skipped repo setup (edit commands want a clean git tree)")
+        ),
+        InitOutcome::AlreadyRepo => {} // inside an existing repo — leave it alone
+    }
 }
 
 /// Print the dependency advice block (missing required deps + install plans).

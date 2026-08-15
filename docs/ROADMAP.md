@@ -79,7 +79,7 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 - [ ] `cardano-init` dependency **install** (auto-install): runs the doctor's resolved plan with consent, across the installer graph (incl. bootstrapping `aikup`/`cardano-up`, etc.). Officially nice-to-have; **first thing cut** if it threatens the RC date.
 
 **Editing an existing project (#26):**
-- [x] `cardano-init add`/`remove`/`edit`: reconstruct the current selection by detection, diff at the component-directory level, re-wire the shared files, write under a git-clean safety net. Never rewrites user code in a kept component. Reuses the init compat/experimental gates. See `docs/proposals/updating-project-tooling.md` (PRD FR-25).
+- [x] `cardano-init add`/`remove`: reconstruct the current selection by detection, diff at the component-directory level, re-wire the shared files, write under a git-clean safety net. Never rewrites user code in a kept component. Reuses the init compat/experimental gates. New projects are git-initialized with an initial commit so the safety net works immediately. See `docs/proposals/updating-project-tooling.md` (PRD FR-25).
 
 **Engineering hardening:**
 - [ ] **CI/CD pipeline** improvements: per-tool build smoke tests (toolchains or Nix), snapshot/determinism gates, contract-compliance gates, release artifacts.
