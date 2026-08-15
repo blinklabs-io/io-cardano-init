@@ -59,14 +59,23 @@ just clean    # Remove build artifacts
 
 ## Development
 
-`build`, `test`, and `clean` run from the top level. Some components also expose
-a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every
-component has one (it's optional), so check with `just -f <dir>/Justfile --list`
-and run it directly, e.g. `just -f <dir>/Justfile dev`.
+`build`, `test`, and `clean` run from the top level. Some components also expose a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every component has one (it's optional), so check with `just -f <dir>/Justfile --list` and run it directly, e.g. `just -f <dir>/Justfile dev`.
 
 ## Network
 
-This project targets the **preprod** network.
+The active network is controlled by a single variable — `CARDANO_NETWORK` in [`.env`](.env) — which every component reads at runtime. This project is generated for **preprod**:
+
+```bash
+CARDANO_NETWORK=preprod
+```
+To target a different network, edit that one line to `preview`, `preprod`, or `mainnet` and re-run your component's `just` task. Public networks also require a provider API key (e.g. Blockfrost) — set it alongside `CARDANO_NETWORK` in `.env`.
+
+The infrastructure stack provisions a **local** chain for the network named in `.env`. If you change `CARDANO_NETWORK` after the stack is already running, the existing `cardano-up` context keeps its original network — tear it down and bring it back up to re-provision:
+
+```bash
+just -f infra/Justfile clean
+just -f infra/Justfile dev
+```
 
 === AGENTS.md ===
 # AGENTS.md — snap-project
@@ -229,8 +238,12 @@ test:
 
 # Provision the stack and publish its connection details to ../.env.
 # Long-running: cardano-up brings up the Docker services for the context.
+#
+# Network is read from ../.env (CARDANO_NETWORK), defaulting to preview. Note:
+# `context create` is a no-op if the context exists — `just clean` first to
+# re-provision on a different network.
 dev:
-    cardano-up context create snap-project -n preprod 2>/dev/null || true
+    net="$(grep -E '^CARDANO_NETWORK=' ../.env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"')"; cardano-up context create snap-project -n "${net:-preview}" 2>/dev/null || true
     cardano-up install dolos --context snap-project
     cardano-up up --context snap-project
     sh scripts/write-env.sh
@@ -309,7 +322,8 @@ set_key() {
     mv "$tmp" "$ENV_FILE"
 }
 
-set_key CARDANO_NETWORK "preprod"
+# CARDANO_NETWORK is left alone (user config in ../.env) — this script only owns
+# the connection keys below, so a hand-edited network survives `just dev`.
 set_key NODE_SOCKET_PATH "$DOLOS_SOCKET_PATH"
 set_key DOLOS_GRPC_URL "$DOLOS_GRPC"
 

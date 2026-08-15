@@ -240,11 +240,6 @@ fn build_plan_json(query: &HashMap<String, String>, registry: &Registry) -> Resu
 
     let nix = query.get("nix").is_some_and(|v| v == "true" || v == "1");
 
-    let network = query
-        .get("network")
-        .and_then(|n| Network::from_str(n).ok())
-        .unwrap_or(Network::Preview);
-
     let selection = Selection {
         project_name: query
             .get("name")
@@ -252,7 +247,8 @@ fn build_plan_json(query: &HashMap<String, String>, registry: &Registry) -> Resu
             .cloned()
             .unwrap_or_else(|| "my-project".to_string()),
         assignments,
-        network,
+        // Always preview; switch via CARDANO_NETWORK in the generated .env.
+        network: Network::Preview,
         nix,
     };
 

@@ -132,7 +132,7 @@ pub struct RoleConfig { pub template: String }  // path under templates/
 pub struct Selection {
     pub project_name: String,
     pub assignments: Vec<RoleAssignment>,  // Infrastructure may appear multiple times
-    pub network: Network,                  // Preview | Preprod | Mainnet (default Preview)
+    pub network: Network,                  // Always Preview; switch via CARDANO_NETWORK in the generated .env
     pub nix: bool,
 }
 pub struct RoleAssignment { pub role: Role, pub tool_id: String }

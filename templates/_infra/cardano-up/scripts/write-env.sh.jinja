@@ -25,7 +25,8 @@ set_key() {
     mv "$tmp" "$ENV_FILE"
 }
 
-set_key CARDANO_NETWORK "{{ network }}"
+# CARDANO_NETWORK is left alone (user config in ../.env) — this script only owns
+# the connection keys below, so a hand-edited network survives `just dev`.
 {%- for m in infra_env %}
 set_key {{ m.to }} "${{ m.from }}"
 {%- endfor %}

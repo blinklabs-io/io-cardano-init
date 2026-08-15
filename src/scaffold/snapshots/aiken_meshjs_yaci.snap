@@ -74,15 +74,9 @@ just clean    # Remove build artifacts
 
 ## Development
 
-`build`, `test`, and `clean` run from the top level. Some components also expose
-a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every
-component has one (it's optional), so check with `just -f <dir>/Justfile --list`
-and run it directly, e.g. `just -f <dir>/Justfile dev`.
+`build`, `test`, and `clean` run from the top level. Some components also expose a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every component has one (it's optional), so check with `just -f <dir>/Justfile --list` and run it directly, e.g. `just -f <dir>/Justfile dev`.
 
-When a component provisions a local devnet, its `dev` writes the connection
-details into `.env` and the off-chain component connects to it automatically;
-with no local devnet it falls back to a public provider (Blockfrost). You never
-wire this by hand — it follows the presence of `INDEXER_URL` in `.env`.
+When a component provisions a local devnet, its `dev` writes the connection details into `.env` and the off-chain component connects to it automatically; with no local devnet it falls back to a public provider (Blockfrost). You never wire this by hand — it follows the presence of `INDEXER_URL` in `.env`.
 
 ## On-chain: Aiken
 
@@ -104,10 +98,7 @@ just test-off-chain
 
 ## Devnet: Yaci DevKit
 
-The `devnet/` directory runs a local throwaway chain via Yaci DevKit.
-`just test-integration` spins it up, runs an integration smoke test, and tears it
-down; `just -f devnet/Justfile dev` starts a persistent devnet that
-off-chain components connect to automatically (via `.env`).
+The `devnet/` directory runs a local throwaway chain via Yaci DevKit. `just test-integration` spins it up, runs an integration smoke test, and tears it down; `just -f devnet/Justfile dev` starts a persistent devnet that off-chain components connect to automatically (via `.env`).
 
 ```bash
 just test-integration
@@ -115,7 +106,12 @@ just test-integration
 
 ## Network
 
-This project targets the **preview** network.
+The active network is controlled by a single variable — `CARDANO_NETWORK` in [`.env`](.env) — which every component reads at runtime. This project is generated for **preview**:
+
+```bash
+CARDANO_NETWORK=preview
+```
+To target a different network, edit that one line to `preview`, `preprod`, or `mainnet` and re-run your component's `just` task. Public networks also require a provider API key (e.g. Blockfrost) — set it alongside `CARDANO_NETWORK` in `.env`.
 
 === AGENTS.md ===
 # AGENTS.md — snap-project

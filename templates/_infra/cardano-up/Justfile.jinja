@@ -24,8 +24,12 @@ test:
 
 # Provision the stack and publish its connection details to ../.env.
 # Long-running: cardano-up brings up the Docker services for the context.
+#
+# Network is read from ../.env (CARDANO_NETWORK), defaulting to preview. Note:
+# `context create` is a no-op if the context exists — `just clean` first to
+# re-provision on a different network.
 dev:
-    cardano-up context create {{ infra_context_name }} -n {{ network }} 2>/dev/null || true
+    net="$(grep -E '^CARDANO_NETWORK=' ../.env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"')"; cardano-up context create {{ infra_context_name }} -n "${net:-preview}" 2>/dev/null || true
 {%- for t in infra_tools %}
     cardano-up install {{ t.cardano_up_package }} --context {{ infra_context_name }}
 {%- endfor %}

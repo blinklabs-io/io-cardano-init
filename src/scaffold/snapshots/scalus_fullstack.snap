@@ -60,18 +60,11 @@ just clean    # Remove build artifacts
 
 ## Development
 
-`build`, `test`, and `clean` run from the top level. Some components also expose
-a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every
-component has one (it's optional), so check with `just -f <dir>/Justfile --list`
-and run it directly, e.g. `just -f <dir>/Justfile dev`.
+`build`, `test`, and `clean` run from the top level. Some components also expose a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every component has one (it's optional), so check with `just -f <dir>/Justfile --list` and run it directly, e.g. `just -f <dir>/Justfile dev`.
 
 ## Protocol: Scalus (fullstack)
 
-The `protocol/` directory is a single scala component that
-implements **both** the on-chain validators and the off-chain transaction logic in one
-build. Its two halves share types directly, so there's no `plutus.json` round-trip between
-them — but `just build-protocol` still writes `blueprint/plutus.json` so the other
-components (devnet, formal-methods, infrastructure) can consume it.
+The `protocol/` directory is a single scala component that implements **both** the on-chain validators and the off-chain transaction logic in one build. Its two halves share types directly, so there's no `plutus.json` round-trip between them — but `just build-protocol` still writes `blueprint/plutus.json` so the other components (devnet, formal-methods, infrastructure) can consume it.
 
 ```bash
 just build-protocol
@@ -80,7 +73,12 @@ just test-protocol
 
 ## Network
 
-This project targets the **preview** network.
+The active network is controlled by a single variable — `CARDANO_NETWORK` in [`.env`](.env) — which every component reads at runtime. This project is generated for **preview**:
+
+```bash
+CARDANO_NETWORK=preview
+```
+To target a different network, edit that one line to `preview`, `preprod`, or `mainnet` and re-run your component's `just` task. Public networks also require a provider API key (e.g. Blockfrost) — set it alongside `CARDANO_NETWORK` in `.env`.
 
 === AGENTS.md ===
 # AGENTS.md — snap-project

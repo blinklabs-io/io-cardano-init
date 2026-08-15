@@ -43,27 +43,17 @@ just clean    # Remove build artifacts
 
 ## Development
 
-`build`, `test`, and `clean` run from the top level. Some components also expose
-a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every
-component has one (it's optional), so check with `just -f <dir>/Justfile --list`
-and run it directly, e.g. `just -f <dir>/Justfile dev`.
+`build`, `test`, and `clean` run from the top level. Some components also expose a long-running `dev` — a watch mode, a local devnet, or a REPL. Not every component has one (it's optional), so check with `just -f <dir>/Justfile --list` and run it directly, e.g. `just -f <dir>/Justfile dev`.
 {%- if has_off_chain %}
 
-When a component provisions a local devnet, its `dev` writes the connection
-details into `.env` and the off-chain component connects to it automatically;
-with no local devnet it falls back to a public provider (Blockfrost). You never
-wire this by hand — it follows the presence of `INDEXER_URL` in `.env`.
+When a component provisions a local devnet, its `dev` writes the connection details into `.env` and the off-chain component connects to it automatically; with no local devnet it falls back to a public provider (Blockfrost). You never wire this by hand — it follows the presence of `INDEXER_URL` in `.env`.
 {%- endif %}
 {%- endif %}
 {%- if has_fullstack %}
 
 ## Protocol: {{ fullstack.tool_name }} (fullstack)
 
-The `{{ fullstack.dir }}/` directory is a single {{ fullstack.language }} component that
-implements **both** the on-chain validators and the off-chain transaction logic in one
-build. Its two halves share types directly, so there's no `plutus.json` round-trip between
-them — but `just build-protocol` still writes `blueprint/plutus.json` so the other
-components (devnet, formal-methods, infrastructure) can consume it.
+The `{{ fullstack.dir }}/` directory is a single {{ fullstack.language }} component that implements **both** the on-chain validators and the off-chain transaction logic in one build. Its two halves share types directly, so there's no `plutus.json` round-trip between them — but `just build-protocol` still writes `blueprint/plutus.json` so the other components (devnet, formal-methods, infrastructure) can consume it.
 
 ```bash
 just build-protocol
@@ -96,10 +86,7 @@ just test-off-chain
 
 ## Devnet: {{ devnet.tool_name }}
 
-The `{{ devnet.dir }}/` directory runs a local throwaway chain via {{ devnet.tool_name }}.
-`just test-integration` spins it up, runs an integration smoke test, and tears it
-down; `just -f {{ devnet.dir }}/Justfile dev` starts a persistent devnet that
-off-chain components connect to automatically (via `.env`).
+The `{{ devnet.dir }}/` directory runs a local throwaway chain via {{ devnet.tool_name }}. `just test-integration` spins it up, runs an integration smoke test, and tears it down; `just -f {{ devnet.dir }}/Justfile dev` starts a persistent devnet that off-chain components connect to automatically (via `.env`).
 
 ```bash
 just test-integration
@@ -118,4 +105,18 @@ just verify
 
 ## Network
 
-This project targets the **{{ network }}** network.
+The active network is controlled by a single variable — `CARDANO_NETWORK` in [`.env`](.env) — which every component reads at runtime. This project is generated for **{{ network }}**:
+
+```bash
+CARDANO_NETWORK={{ network }}
+```
+To target a different network, edit that one line to `preview`, `preprod`, or `mainnet` and re-run your component's `just` task. Public networks also require a provider API key (e.g. Blockfrost) — set it alongside `CARDANO_NETWORK` in `.env`.
+{%- if has_infra %}
+
+The infrastructure stack provisions a **local** chain for the network named in `.env`. If you change `CARDANO_NETWORK` after the stack is already running, the existing `cardano-up` context keeps its original network — tear it down and bring it back up to re-provision:
+
+```bash
+just -f infra/Justfile clean
+just -f infra/Justfile dev
+```
+{%- endif %}

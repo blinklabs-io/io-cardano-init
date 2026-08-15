@@ -39,7 +39,6 @@ cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 | `--infra <TOOL_ID>` | string, repeatable | Multiple allowed (only multi-tool role). |
 | `--devnet <TOOL_ID>` | string | At most one. |
 | `--formal-methods <TOOL_ID>` | string | At most one. |
-| `--network <preview\|preprod\|mainnet>` | enum | Default `preview`. |
 | `--nix` | bool | Emit `flake.nix` + `.envrc`. |
 | `--allow-experimental` | bool | Opt in to experimental tools (§3.2.1). Required to select one in one-shot/JSON; pre-acknowledges the interactive confirm. |
 | `--ignore-warning` | bool | Scaffold an off-chain ↔ provider combination the compatibility gate flags as incompatible (§3.2.2). Downgrades the stop to a warning. |
@@ -60,7 +59,7 @@ pair is what triggers the collapse into a single `protocol/` component (§3.2, �
 | Code | Meaning | Examples |
 |------|---------|----------|
 | `0` | Success (incl. `--dry-run`, and interactive abort-by-choice) | generated; planned |
-| `2` | **Usage / validation** error | bad flag, `unknown_tool`, `tool_role_mismatch`, `no_roles_selected`, `invalid_network`, `invalid_project_name`, `name_required` |
+| `2` | **Usage / validation** error | bad flag, `unknown_tool`, `tool_role_mismatch`, `no_roles_selected`, `invalid_project_name`, `name_required` |
 | `1` | **Runtime** error | `dir_exists` (non-empty), registry load failure, render/IO error, web bind failure |
 
 
@@ -93,7 +92,6 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `no_roles_selected` | 2 | `{ }` |
 | `experimental_not_allowed` | 2 | `{ tools: [..], remedy: "--allow-experimental" }` (an experimental tool was selected in one-shot/JSON without `--allow-experimental`; §3.2.1) |
 | `incompatible_tools` | 2 | `{ tools: [off_chain_id, provider_ids…], reason, compatible_providers: [..], compatible_off_chain: [..], remedy: "--ignore-warning" }` (the off-chain tool and its selected providers share no seam; §3.2.2) |
-| `invalid_network` | 2 | `{ value, expected: ["preview","preprod","mainnet"] }` |
 | `dir_exists` | 1 | `{ path }` (exists and non-empty) |
 | `registry_load` | 1 | `{ file?, detail }` |
 | `scaffold_error` | 1 | `{ path?, detail }` (asset-not-found, manifest-parse, render, io) |
@@ -282,7 +280,8 @@ Load-time validation (`registry/loader.rs`), all fatal:
 ```rust
 struct Selection { project_name: String, assignments: Vec<RoleAssignment>, network: Network, nix: bool }
 struct RoleAssignment { role: Role, tool_id: String }
-enum Network { Preview, Preprod, Mainnet }   // Display/from_str = lowercase
+enum Network { Preview, Preprod, Mainnet }   // Display = lowercase. Not a scaffold-time
+                                             // choice: always Preview. Switch via CARDANO_NETWORK in .env.
 ```
 
 A `Selection` is **valid by construction** (ARCHITECTURE §3.3); there is no separate validation pass. Edges in §3.5/§12.
@@ -724,7 +723,6 @@ Identical `(binary, Selection)` ⇒ byte-identical tree. Rules:
 | Unknown tool id | error, list valid tools for role | `unknown_tool` / 2 |
 | Tool doesn't fill the role | error, list tool's valid roles | `tool_role_mismatch` / 2 |
 | No roles selected | error | `no_roles_selected` / 2 |
-| Bad `--network` | error | `invalid_network` / 2 |
 | `--infra X --infra X` | de-duplicated (keep first) | ok |
 | `--fullstack X` (X has `[fullstack]`) | one `protocol/` component | ok |
 | `--on-chain X --off-chain X` (X has `[fullstack]`) | collapses to one `protocol/` component | ok |
@@ -751,7 +749,7 @@ Identical `(binary, Selection)` ⇒ byte-identical tree. Rules:
 
 - `GET /` → `ui.html`.
 - `GET /api/registry` → `{ "tools": [ … ] }` (prebuilt once).
-- `GET /api/plan?on_chain=&off_chain=&fullstack=&infra=a,b&devnet=&formal_methods=&network=&nix=&name=` → `{ "files": [ … ] }`, computed by the **real `scaffold::planner`** (no duplicated logic). Invalid input → `{ "error": "…" }` with 4xx. A non-empty `fullstack=X` pushes both on-chain + off-chain assignments for `X` (mirrors the CLI sugar), so the preview shows the collapsed `protocol/` tree.
+- `GET /api/plan?on_chain=&off_chain=&fullstack=&infra=a,b&devnet=&formal_methods=&nix=&name=` → `{ "files": [ … ] }`, computed by the **real `scaffold::planner`** (no duplicated logic). Invalid input → `{ "error": "…" }` with 4xx. A non-empty `fullstack=X` pushes both on-chain + off-chain assignments for `X` (mirrors the CLI sugar), so the preview shows the collapsed `protocol/` tree.
 
 The command-string the UI emits, and the previewed tree, must equal what the CLI produces for the same selection. Hosted-page strategy is **OD-1, open** (ARCHITECTURE §10.2).
 
