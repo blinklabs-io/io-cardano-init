@@ -281,7 +281,7 @@ pub struct ToolDef {
 // ---------------------------------------------------------------------------
 
 /// One tool assigned to one role.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleAssignment {
     pub role: Role,
     pub tool_id: String,
@@ -332,7 +332,7 @@ impl fmt::Display for UnknownNetworkError {
 impl std::error::Error for UnknownNetworkError {}
 
 /// The complete, fully resolved user selection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
     pub project_name: String,
     pub assignments: Vec<RoleAssignment>,

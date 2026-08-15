@@ -78,6 +78,9 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 **Dependency install command (nice-to-have, attempted):**
 - [ ] `cardano-init` dependency **install** (auto-install): runs the doctor's resolved plan with consent, across the installer graph (incl. bootstrapping `aikup`/`cardano-up`, etc.). Officially nice-to-have; **first thing cut** if it threatens the RC date.
 
+**Editing an existing project (#26):**
+- [x] `cardano-init add`/`remove`/`edit`: reconstruct the current selection by detection, diff at the component-directory level, re-wire the shared files, write under a git-clean safety net. Never rewrites user code in a kept component. Reuses the init compat/experimental gates. See `docs/proposals/updating-project-tooling.md` (PRD FR-25).
+
 **Engineering hardening:**
 - [ ] **CI/CD pipeline** improvements: per-tool build smoke tests (toolchains or Nix), snapshot/determinism gates, contract-compliance gates, release artifacts.
 - [ ] **Scheduled maintenance smoke run** (weekly cron): re-runs the per-tool build+test matrix to catch generated projects breaking from a hardfork / upstream release / dependency bitrot *between* commits, opening a tracking issue on failure. Distinct from PR gates (ARCHITECTURE §11).

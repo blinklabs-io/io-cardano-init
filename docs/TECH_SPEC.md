@@ -23,7 +23,12 @@ cardano-init [INIT_FLAGS]            # default: one-shot if --name given, else i
 cardano-init web [--port <u16>]      # local web builder (default port 3000)
 cardano-init doctor                  # check this project's dependencies + advise installs (§9)
 cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
+cardano-init add [ROLE_FLAGS]        # add/swap tools in the project in the cwd (see proposal)
+cardano-init remove [ROLE_FLAGS]     # remove a role / infra provider from the cwd project
+cardano-init edit                    # interactive: re-open the selector, seeded from the cwd project
 ```
+
+The `add`/`remove`/`edit` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix live in `docs/proposals/updating-project-tooling.md`.
 
 `--format human|json` (planned) is a global flag; default `human`. `json` **implies non-interactive**: it never prompts; if required input is missing it errors instead.
 
@@ -95,6 +100,10 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `incompatible_tools` | 2 | `{ tools: [off_chain_id, provider_ids…], reason, compatible_providers: [..], compatible_off_chain: [..], remedy: "--ignore-warning" }` (the off-chain tool and its selected providers share no seam; §3.2.2) |
 | `invalid_network` | 2 | `{ value, expected: ["preview","preprod","mainnet"] }` |
 | `dir_exists` | 1 | `{ path }` (exists and non-empty) |
+| `project_unrecognized` | 2 | `{ dirs: [..] }` — `add`/`remove`/`edit` couldn't identify a component directory; fatal in `json`/non-interactive (never guesses) |
+| `slot_occupied` | 2 | `{ role, dir }` — a create target directory already exists and isn't the recognized current component |
+| `nothing_to_change` | 2 | `{ }` — the requested edit is a no-op against the detected selection |
+| `worktree_dirty` | 1 | `{ path }` — uncommitted changes (or not a git repo) and no `--force` |
 | `registry_load` | 1 | `{ file?, detail }` |
 | `scaffold_error` | 1 | `{ path?, detail }` (asset-not-found, manifest-parse, render, io) |
 | `web_bind` | 1 | `{ port, detail }` |

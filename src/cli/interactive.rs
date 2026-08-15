@@ -17,16 +17,27 @@ pub fn run_interactive(
     allow_experimental: bool,
     ignore_warning: bool,
 ) -> Result<Selection, CliError> {
+    run_interactive_seeded(registry, None, allow_experimental, ignore_warning)
+}
+
+/// Like [`run_interactive`], but pre-fills the selector from an existing
+/// selection (used by `edit`). `defaults = None` is a fresh init with no seed.
+pub fn run_interactive_seeded(
+    registry: &Registry,
+    defaults: Option<&Selection>,
+    allow_experimental: bool,
+    ignore_warning: bool,
+) -> Result<Selection, CliError> {
     let theme = ColorfulTheme::default();
 
     // Step 1: Welcome
     output::print_welcome();
 
-    // Step 2: Tool selection — prompt one tool per role (default "(skip)"). No
-    // separate role-picking step: skipping a role is choosing "(skip)" for it.
-    // Choosing the same fullstack-capable tool for both on-chain and off-chain
-    // collapses into a single `protocol/` component automatically (planner).
-    let mut assignments = select_tools(&theme, registry, ignore_warning)?;
+    // Step 2: Tool selection — prompt one tool per role (default "(skip)", or the
+    // seeded tool when editing). No separate role-picking step: skipping a role
+    // is choosing "(skip)" for it. Choosing the same fullstack-capable tool for
+    // both on-chain and off-chain collapses into a single `protocol/` component.
+    let mut assignments = select_tools(&theme, registry, ignore_warning, defaults)?;
     if assignments.is_empty() {
         return Err(CliError::NoRolesSelected);
     }
@@ -41,12 +52,15 @@ pub fn run_interactive(
         }
     }
 
-    // Step 3: Options
-    let project_name = prompt_project_name(&theme)?;
-    let network = prompt_network(&theme)?;
+    // Step 3: Options (seeded from `defaults` when editing).
+    let project_name = prompt_project_name(&theme, defaults.map(|s| s.project_name.as_str()))?;
+    let network = prompt_network(
+        &theme,
+        defaults.map(|s| s.network).unwrap_or(Network::Preview),
+    )?;
     let nix = Confirm::with_theme(&theme)
         .with_prompt("Set up Nix for dependency management?")
-        .default(false)
+        .default(defaults.map(|s| s.nix).unwrap_or(false))
         .interact()?;
     let selection = Selection {
         project_name,
@@ -81,6 +95,7 @@ fn select_tools(
     theme: &ColorfulTheme,
     registry: &Registry,
     ignore_warning: bool,
+    defaults: Option<&Selection>,
 ) -> Result<Vec<RoleAssignment>, CliError> {
     let mut assignments = Vec::new();
 
@@ -91,14 +106,27 @@ fn select_tools(
         }
 
         if role == Role::Infrastructure {
-            let items: Vec<String> = tools
+            // Pre-check the providers already in the seeded selection.
+            let seeded: Vec<&str> = defaults
+                .map(|s| {
+                    s.assignments
+                        .iter()
+                        .filter(|a| a.role == Role::Infrastructure)
+                        .map(|a| a.tool_id.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let items: Vec<(String, bool)> = tools
                 .iter()
                 .map(|t| {
-                    format!(
-                        "{}{} — {}",
-                        t.name,
-                        output::experimental_tag(t),
-                        output::first_sentence(&t.description)
+                    (
+                        format!(
+                            "{}{} — {}",
+                            t.name,
+                            output::experimental_tag(t),
+                            output::first_sentence(&t.description)
+                        ),
+                        seeded.contains(&t.id.as_str()),
                     )
                 })
                 .collect();
@@ -107,7 +135,7 @@ fn select_tools(
                     "Choose tools for {} (space to select, enter to confirm — none to skip):",
                     role
                 ))
-                .items(&items)
+                .items_checked(&items)
                 .interact()?;
 
             for &idx in &selections {
@@ -141,13 +169,21 @@ fn select_tools(
                 }
             }));
 
+            // Default to the seeded tool for this role (edit), else "(skip)".
+            // `items` index is `tool position + 1` (the leading "(skip)").
+            let default_idx = defaults
+                .and_then(|s| s.assignments.iter().find(|a| a.role == role))
+                .and_then(|a| tools.iter().position(|t| t.id == a.tool_id))
+                .map(|pos| pos + 1)
+                .unwrap_or(0);
+
             // Re-prompt if a disabled tool is chosen: an unavailable option is
             // shown (with its reason) but not selectable.
             loop {
                 let idx = Select::with_theme(theme)
                     .with_prompt(format!("Choose a tool for {}:", role))
                     .items(&items)
-                    .default(0)
+                    .default(default_idx)
                     .interact()?;
 
                 if idx == 0 {
@@ -253,10 +289,10 @@ fn confirm_experimental(
         .collect())
 }
 
-fn prompt_project_name(theme: &ColorfulTheme) -> Result<String, CliError> {
+fn prompt_project_name(theme: &ColorfulTheme, default: Option<&str>) -> Result<String, CliError> {
     let name: String = Input::with_theme(theme)
         .with_prompt("Project name")
-        .default("my-protocol".to_string())
+        .default(default.unwrap_or("my-protocol").to_string())
         .validate_with(|input: &String| -> Result<(), String> {
             validate_project_name(input).map_err(|e| e.to_string())
         })
@@ -264,12 +300,16 @@ fn prompt_project_name(theme: &ColorfulTheme) -> Result<String, CliError> {
     Ok(name)
 }
 
-fn prompt_network(theme: &ColorfulTheme) -> Result<Network, CliError> {
+fn prompt_network(theme: &ColorfulTheme, default: Network) -> Result<Network, CliError> {
     let items = ["preview", "preprod", "mainnet"];
+    let default_idx = items
+        .iter()
+        .position(|n| *n == default.to_string())
+        .unwrap_or(0);
     let idx = Select::with_theme(theme)
         .with_prompt("Target network")
         .items(&items)
-        .default(0)
+        .default(default_idx)
         .interact()?;
     Ok(Network::from_str(items[idx]).expect("hardcoded network values are valid"))
 }

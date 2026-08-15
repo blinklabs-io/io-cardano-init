@@ -2,6 +2,7 @@ pub mod interactive;
 pub mod oneshot;
 pub mod output;
 pub mod theme;
+pub mod update;
 
 use std::path::PathBuf;
 
@@ -53,6 +54,106 @@ pub enum Command {
 
     /// List the available roles and tools (use --format json for agents)
     List,
+
+    /// Add or swap a tool/role in the project in the current directory
+    Add(AddArgs),
+
+    /// Remove a role (or an infrastructure provider) from the project in the
+    /// current directory
+    Remove(RemoveArgs),
+
+    /// Edit the project in the current directory interactively (re-open the
+    /// selector, pre-filled from the detected stack)
+    Edit(EditArgs),
+}
+
+/// Flags shared by the update commands (add / remove / edit).
+#[derive(clap::Args, Debug, Default, Clone)]
+pub struct UpdateFlags {
+    /// Show the change set without writing anything
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Update even when the git working tree has uncommitted changes (there is
+    /// then no `git diff` to review/revert against)
+    #[arg(long)]
+    pub force: bool,
+
+    /// Proceed even if the resulting off-chain ↔ provider selection is flagged
+    /// incompatible (downgrades the stop to a warning)
+    #[arg(long)]
+    pub ignore_warning: bool,
+
+    /// Allow experimental tools in the resulting selection
+    #[arg(long)]
+    pub allow_experimental: bool,
+}
+
+/// Arguments for `add`: the same role flags as init (presence assigns/replaces).
+#[derive(clap::Args, Debug)]
+pub struct AddArgs {
+    /// On-chain tool (replaces the current on-chain tool if any)
+    #[arg(long, value_name = "TOOL_ID")]
+    pub on_chain: Option<String>,
+
+    /// Off-chain tool (replaces the current off-chain tool if any)
+    #[arg(long, value_name = "TOOL_ID")]
+    pub off_chain: Option<String>,
+
+    /// Fullstack tool filling both on-chain and off-chain as one `protocol/`
+    /// component. Not combinable with --on-chain/--off-chain.
+    #[arg(long, value_name = "TOOL_ID")]
+    pub fullstack: Option<String>,
+
+    /// Infrastructure provider to add (repeatable)
+    #[arg(long, value_name = "TOOL_ID")]
+    pub infra: Vec<String>,
+
+    /// Devnet tool (replaces the current devnet tool if any)
+    #[arg(long, value_name = "TOOL_ID")]
+    pub devnet: Option<String>,
+
+    /// Formal-methods tool (replaces the current one if any)
+    #[arg(long, value_name = "TOOL_ID")]
+    pub formal_methods: Option<String>,
+
+    #[command(flatten)]
+    pub flags: UpdateFlags,
+}
+
+/// Arguments for `remove`: bare role flags drop that role; `--infra <id>` drops
+/// one provider.
+#[derive(clap::Args, Debug)]
+pub struct RemoveArgs {
+    /// Remove the on-chain component
+    #[arg(long)]
+    pub on_chain: bool,
+
+    /// Remove the off-chain component
+    #[arg(long)]
+    pub off_chain: bool,
+
+    /// Remove an infrastructure provider by id (repeatable)
+    #[arg(long, value_name = "TOOL_ID")]
+    pub infra: Vec<String>,
+
+    /// Remove the devnet component
+    #[arg(long)]
+    pub devnet: bool,
+
+    /// Remove the formal-methods component
+    #[arg(long)]
+    pub formal_methods: bool,
+
+    #[command(flatten)]
+    pub flags: UpdateFlags,
+}
+
+/// Arguments for `edit` (interactive).
+#[derive(clap::Args, Debug)]
+pub struct EditArgs {
+    #[command(flatten)]
+    pub flags: UpdateFlags,
 }
 
 /// Arguments for the default init mode (interactive or one-shot).
@@ -258,6 +359,43 @@ pub enum CliError {
     )]
     NameRequired,
 
+    #[error(
+        "this directory doesn't look like a cardano-init project — unrecognized: {}",
+        .dirs.join(", ")
+    )]
+    #[diagnostic(
+        code(cardano_init::project_unrecognized),
+        help(
+            "run add/remove/edit inside a generated project; fix or rename any renamed/foreign component directories first."
+        )
+    )]
+    ProjectUnrecognized { dirs: Vec<String> },
+
+    #[error("can't add the {role} component: '{dir}/' already exists and isn't recognized")]
+    #[diagnostic(
+        code(cardano_init::slot_occupied),
+        help("remove or rename '{dir}/' first, then re-run.")
+    )]
+    SlotOccupied { role: String, dir: String },
+
+    #[error("the working tree at '{path}' has uncommitted changes")]
+    #[diagnostic(
+        code(cardano_init::worktree_dirty),
+        help(
+            "commit or stash first so the update is reviewable with `git diff`, or re-run with --force to update anyway."
+        )
+    )]
+    WorktreeDirty { path: String },
+
+    #[error("nothing to change — the project already matches this selection")]
+    #[diagnostic(
+        code(cardano_init::nothing_to_change),
+        help(
+            "pass a different tool/role, or run `cardano-init edit` to change the stack interactively."
+        )
+    )]
+    NothingToChange,
+
     #[error("user aborted")]
     #[diagnostic(code(cardano_init::aborted))]
     Aborted,
@@ -308,7 +446,10 @@ impl CliError {
             | CliError::IncompatibleTools(_)
             | CliError::InvalidNetwork { .. }
             | CliError::InvalidProjectName { .. }
-            | CliError::NameRequired => 2,
+            | CliError::NameRequired
+            | CliError::ProjectUnrecognized { .. }
+            | CliError::SlotOccupied { .. }
+            | CliError::NothingToChange => 2,
 
             CliError::Aborted => 0,
 
@@ -317,6 +458,7 @@ impl CliError {
             | CliError::Web(_)
             | CliError::Catalog(_)
             | CliError::DirectoryExists { .. }
+            | CliError::WorktreeDirty { .. }
             | CliError::Prompt(_) => 1,
         }
     }
@@ -339,6 +481,10 @@ impl CliError {
             CliError::InvalidNetwork { .. } => "invalid_network",
             CliError::InvalidProjectName { .. } => "invalid_project_name",
             CliError::NameRequired => "name_required",
+            CliError::ProjectUnrecognized { .. } => "project_unrecognized",
+            CliError::SlotOccupied { .. } => "slot_occupied",
+            CliError::WorktreeDirty { .. } => "worktree_dirty",
+            CliError::NothingToChange => "nothing_to_change",
             CliError::Aborted => "aborted",
             CliError::Prompt(_) => "prompt_error",
         }
@@ -386,9 +532,13 @@ impl CliError {
                 "compatible_off_chain": e.compatible_off_chain,
                 "remedy": "--ignore-warning",
             }),
+            CliError::ProjectUnrecognized { dirs } => json!({ "dirs": dirs }),
+            CliError::SlotOccupied { role, dir } => json!({ "role": role, "dir": dir }),
+            CliError::WorktreeDirty { path } => json!({ "path": path }),
             CliError::NoRolesSelected
             | CliError::FullstackConflict
             | CliError::NameRequired
+            | CliError::NothingToChange
             | CliError::Aborted
             | CliError::Prompt(_) => json!({}),
         }
@@ -500,6 +650,9 @@ pub fn run() -> i32 {
             output::print_list(&registry, format);
             Ok(())
         }
+        Some(Command::Add(args)) => update::run_add(args, &registry, format),
+        Some(Command::Remove(args)) => update::run_remove(args, &registry, format),
+        Some(Command::Edit(args)) => update::run_edit(args, &registry, format),
         None => run_init(cli.init, &registry, format),
     };
 
@@ -635,6 +788,37 @@ fn run_doctor(registry: &Registry, format: Format) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Experimental gate: fail if `selection` includes a not-yet-build-green tool.
+/// Shared by `init` (one-shot) and the update commands; the caller skips it when
+/// `--allow-experimental` was given.
+fn experimental_gate(
+    selection: &crate::registry::types::Selection,
+    registry: &Registry,
+) -> Result<(), CliError> {
+    let experimental = output::selected_experimental_tools(selection, registry);
+    if experimental.is_empty() {
+        return Ok(());
+    }
+    let tools: Vec<String> = experimental.iter().map(|t| t.id.clone()).collect();
+    let labels: Vec<String> = experimental
+        .iter()
+        .map(|t| format!("{} ({})", t.name, t.id))
+        .collect();
+    // The exact role flags that pulled in the experimental tool(s), so the
+    // suggested command is copy-pasteable.
+    let example_flags: Vec<String> = selection
+        .assignments
+        .iter()
+        .filter(|a| tools.iter().any(|id| id == &a.tool_id))
+        .flat_map(|a| [role_flag(a.role).to_string(), a.tool_id.clone()])
+        .collect();
+    Err(CliError::ExperimentalNotAllowed {
+        tools,
+        labels,
+        example_flags,
+    })
+}
+
 /// The one-shot flag that assigns a tool to a given role, e.g. `--on-chain`.
 /// Used to build a copy-pasteable example command in error messages.
 fn role_flag(role: Role) -> &'static str {
@@ -679,27 +863,7 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
         // tool requires explicit opt-in. Non-interactive can't prompt, so this
         // is a hard usage error unless --allow-experimental was passed.
         if !args.allow_experimental {
-            let experimental = output::selected_experimental_tools(&selection, registry);
-            if !experimental.is_empty() {
-                let tools: Vec<String> = experimental.iter().map(|t| t.id.clone()).collect();
-                let labels: Vec<String> = experimental
-                    .iter()
-                    .map(|t| format!("{} ({})", t.name, t.id))
-                    .collect();
-                // The exact role flags that pulled in the experimental tool(s),
-                // so the suggested command is copy-pasteable.
-                let example_flags: Vec<String> = selection
-                    .assignments
-                    .iter()
-                    .filter(|a| tools.iter().any(|id| id == &a.tool_id))
-                    .flat_map(|a| [role_flag(a.role).to_string(), a.tool_id.clone()])
-                    .collect();
-                return Err(CliError::ExperimentalNotAllowed {
-                    tools,
-                    labels,
-                    example_flags,
-                });
-            }
+            experimental_gate(&selection, registry)?;
         }
         selection
     } else {

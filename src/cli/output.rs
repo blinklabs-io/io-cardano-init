@@ -8,6 +8,7 @@ use crate::doctor::probe::{Environment, ScanResult};
 use crate::registry::loader::Registry;
 use crate::registry::types::{Role, Selection, ToolDef};
 use crate::scaffold::planner::FilePlan;
+use crate::scaffold::update::{SlotOp, UpdatePlan};
 
 // ---------------------------------------------------------------------------
 // JSON envelope (TECH_SPEC §2.4)
@@ -616,6 +617,175 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
             theme::dim("# install the missing dependencies listed above, then:")
         );
     }
+    println!(
+        "    {} {}",
+        theme::accent("→"),
+        theme::command("just build")
+    );
+    println!();
+}
+
+// ---------------------------------------------------------------------------
+// Update (add / remove / edit) presenters
+// ---------------------------------------------------------------------------
+
+/// Bucket an [`UpdatePlan`]'s slot ops into (create, replace, rerender, remove)
+/// directory lists, plus the shared removals, as owned strings.
+fn update_change_buckets(
+    plan: &UpdatePlan,
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let (mut create, mut replace, mut rerender, mut remove) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for op in &plan.slot_ops {
+        let dir = op.dir().to_string_lossy().into_owned();
+        match op {
+            SlotOp::Create(_) => create.push(dir),
+            SlotOp::Replace(_) => replace.push(dir),
+            SlotOp::RerenderInfra(_) => rerender.push(dir),
+            SlotOp::Remove(_) => remove.push(dir),
+        }
+    }
+    (create, replace, rerender, remove)
+}
+
+fn changes_json(plan: &UpdatePlan) -> serde_json::Value {
+    let (create, replace, rerender, remove) = update_change_buckets(plan);
+    let shared_removed: Vec<String> = plan
+        .shared_removals
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    json!({
+        "create": create,
+        "replace": replace,
+        "rerender": rerender,
+        "remove": remove,
+        "shared_removed": shared_removed,
+    })
+}
+
+/// The styled `+ dir/ (would add)` rows for the change panel. `applied` swaps
+/// "would X" (preview) for "X" (result).
+fn update_change_rows(plan: &UpdatePlan, applied: bool) -> Vec<String> {
+    let (create, replace, rerender, remove) = update_change_buckets(plan);
+    let verb = |s: &str| {
+        if applied {
+            s.to_string()
+        } else {
+            format!("would {s}")
+        }
+    };
+    let mut rows = Vec::new();
+    for d in &create {
+        rows.push(format!(
+            "{}  {}/  {}",
+            theme::good("+"),
+            d,
+            theme::dim(verb("add"))
+        ));
+    }
+    for d in &replace {
+        rows.push(format!(
+            "{}  {}/  {}",
+            theme::warn("~"),
+            d,
+            theme::dim(verb("replace"))
+        ));
+    }
+    for d in &rerender {
+        rows.push(format!(
+            "{}  {}/  {}",
+            theme::warn("~"),
+            d,
+            theme::dim(verb("update"))
+        ));
+    }
+    for d in &remove {
+        rows.push(format!(
+            "{}  {}/  {}",
+            theme::warn_strong("-"),
+            d,
+            theme::dim(verb("remove"))
+        ));
+    }
+    for f in &plan.shared_removals {
+        rows.push(format!(
+            "{}  {}  {}",
+            theme::warn_strong("-"),
+            f.to_string_lossy(),
+            theme::dim(verb("remove"))
+        ));
+    }
+    if rows.is_empty() {
+        rows.push(theme::dim("no component changes").to_string());
+    }
+    rows.push(theme::dim("· top-level files re-wired to match").to_string());
+    rows
+}
+
+/// Preview an update (`--dry-run`): the change set, nothing written.
+pub fn print_update_plan(project_name: &str, plan: &UpdatePlan, format: Format) {
+    if format == Format::Json {
+        emit_json_ok(json!({
+            "project": project_name,
+            "applied": false,
+            "dry_run": true,
+            "changes": changes_json(plan),
+        }));
+        return;
+    }
+
+    println!();
+    print_panel(
+        project_name,
+        Some(theme::badge_warn("PLAN")),
+        &update_change_rows(plan, false),
+    );
+    println!();
+    println!(
+        "  {}",
+        theme::dim("Re-run without --dry-run to apply; review the result with `git diff`.")
+    );
+    println!();
+}
+
+/// Report a completed update, with the dependency check-and-advise for the new
+/// selection (a newly-added tool may pull in new deps).
+pub fn print_update_success(
+    selection: &Selection,
+    registry: &Registry,
+    plan: &UpdatePlan,
+    report: &Report,
+    format: Format,
+) {
+    if format == Format::Json {
+        emit_json_ok(json!({
+            "project": selection.project_name,
+            "applied": true,
+            "network": selection.network.to_string(),
+            "nix": selection.nix,
+            "components": components_json(selection, registry),
+            "changes": changes_json(plan),
+            "dependencies": report,
+        }));
+        return;
+    }
+
+    println!();
+    print_panel(
+        &selection.project_name,
+        Some(theme::badge_ok("UPDATED")),
+        &update_change_rows(plan, true),
+    );
+    print_experimental_warning(selection, registry);
+    print_dep_advice(report);
+    println!();
+    print_rule("Next steps");
+    println!(
+        "    {} {}",
+        theme::accent("→"),
+        theme::dim("review the change with `git diff`")
+    );
     println!(
         "    {} {}",
         theme::accent("→"),

@@ -14,7 +14,7 @@ use super::catalog::DepCatalog;
 use super::installers::Installer;
 use crate::contract;
 use crate::registry::loader::Registry;
-use crate::registry::types::{DetectSignature, Role};
+use crate::registry::types::{DetectSignature, Network, Role, RoleAssignment, Selection};
 
 /// Detected operating system family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -275,6 +275,171 @@ pub fn scan_project(root: &Path, registry: &Registry) -> ScanResult {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Selection reconstruction
+// ---------------------------------------------------------------------------
+
+/// A `Selection` reconstructed from an existing project tree, plus the caveats
+/// the reconstruction hit. Detection is the source of truth (no persisted
+/// manifest — matching the doctor's "structure is the source of truth", §9.6),
+/// so the update path *confirms* this with the user before acting on it rather
+/// than trusting it silently.
+#[derive(Debug, Clone)]
+pub struct Reconstructed {
+    /// Best-effort recovered selection.
+    pub selection: Selection,
+    /// Component directories that exist but matched no known tool (renamed,
+    /// hand-edited, or foreign) — carried straight from [`scan_project`].
+    pub unrecognized: Vec<UnrecognizedDir>,
+    /// Scalar fields that had to be guessed (e.g. `"network"` when `.env` is
+    /// missing/edited), so the confirm step can flag them.
+    pub low_confidence: Vec<&'static str>,
+    /// `cardano-up` packages found in `infra/Justfile` that map to no registry
+    /// tool (surfaced, never silently dropped).
+    pub unknown_infra: Vec<String>,
+}
+
+/// Reconstruct the [`Selection`] that would (re)generate the project at `root`.
+///
+/// Roles and tools come from [`scan_project`]; the infra provider set is
+/// recovered by parsing `infra/Justfile` (the aggregated component collapses to
+/// a single driver marker in the scan); `network`/`nix`/`project_name` are read
+/// from `.env`, `flake.nix`, and the directory name. Anything not cleanly
+/// recoverable is reported in `low_confidence`/`unknown_infra` for confirmation.
+pub fn reconstruct(root: &Path, registry: &Registry) -> Reconstructed {
+    let scan = scan_project(root, registry);
+
+    let mut assignments = Vec::new();
+    let mut low_confidence = Vec::new();
+    let mut unknown_infra = Vec::new();
+
+    for component in &scan.components {
+        match component.kind {
+            // Infrastructure collapses to one driver marker in the scan; recover
+            // the individual providers from the generated Justfile.
+            ComponentKind::Role(Role::Infrastructure) => {
+                let (tool_ids, unknown) = parse_infra_providers(root, registry);
+                if tool_ids.is_empty() {
+                    low_confidence.push("infra");
+                }
+                for tool_id in tool_ids {
+                    assignments.push(RoleAssignment {
+                        role: Role::Infrastructure,
+                        tool_id,
+                    });
+                }
+                unknown_infra.extend(unknown);
+            }
+            ComponentKind::Role(role) => assignments.push(RoleAssignment {
+                role,
+                tool_id: component.tool_id.clone(),
+            }),
+            // A fused `protocol/` is one tool filling both roles; re-expand it to
+            // the two assignments the planner re-collapses (TECH_SPEC §3.4).
+            ComponentKind::Protocol => {
+                assignments.push(RoleAssignment {
+                    role: Role::OnChain,
+                    tool_id: component.tool_id.clone(),
+                });
+                assignments.push(RoleAssignment {
+                    role: Role::OffChain,
+                    tool_id: component.tool_id.clone(),
+                });
+            }
+        }
+    }
+
+    if !unknown_infra.is_empty() && !low_confidence.contains(&"infra") {
+        low_confidence.push("infra");
+    }
+
+    let network = read_network(root).unwrap_or_else(|| {
+        low_confidence.push("network");
+        Network::Preview
+    });
+    let nix = root.join("flake.nix").is_file();
+    let project_name = root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .to_string();
+
+    Reconstructed {
+        selection: Selection {
+            project_name,
+            assignments,
+            network,
+            nix,
+        },
+        unrecognized: scan.unrecognized,
+        low_confidence,
+        unknown_infra,
+    }
+}
+
+/// Recover the infra provider set from `infra/Justfile` by scanning its
+/// `cardano-up install <package> …` lines (see
+/// `templates/_infra/cardano-up/Justfile.jinja`) and reverse-mapping each
+/// `<package>` to a registry tool. Returns `(recovered tool ids, unknown
+/// packages)`; a missing/unreadable Justfile yields empty vecs.
+fn parse_infra_providers(root: &Path, registry: &Registry) -> (Vec<String>, Vec<String>) {
+    let text = match std::fs::read_to_string(root.join(contract::DIR_INFRA).join("Justfile")) {
+        Ok(t) => t,
+        Err(_) => return (Vec::new(), Vec::new()),
+    };
+
+    let mut tool_ids = Vec::new();
+    let mut unknown = Vec::new();
+    for line in text.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        for window in tokens.windows(3) {
+            if window[0] == "cardano-up" && window[1] == "install" {
+                let pkg = window[2];
+                match tool_for_package(pkg, registry) {
+                    Some(id) => {
+                        if !tool_ids.contains(&id) {
+                            tool_ids.push(id);
+                        }
+                    }
+                    None => {
+                        if !unknown.iter().any(|u| u == pkg) {
+                            unknown.push(pkg.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (tool_ids, unknown)
+}
+
+/// The infra tool whose `cardano_up_package` equals `pkg`, if any. No reverse
+/// index exists in the registry, so iterate the infra tools (matching the
+/// existing `required_deps` style in the CLI).
+fn tool_for_package(pkg: &str, registry: &Registry) -> Option<String> {
+    registry
+        .tools_for_role(Role::Infrastructure)
+        .into_iter()
+        .find(|t| {
+            t.infra
+                .as_ref()
+                .is_some_and(|i| i.cardano_up_package == pkg)
+        })
+        .map(|t| t.id.clone())
+}
+
+/// Read `CARDANO_NETWORK` from the project's `.env`, if present and valid.
+fn read_network(root: &Path) -> Option<Network> {
+    let text = std::fs::read_to_string(root.join(".env")).ok()?;
+    let prefix = format!("{}=", contract::ENV_NETWORK);
+    for line in text.lines() {
+        if let Some(value) = line.trim().strip_prefix(&prefix) {
+            return Network::from_str(value.trim()).ok();
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +630,123 @@ mod tests {
         let result = scan_project(tmp.path(), &registry());
         assert!(result.components.is_empty());
         assert!(result.unrecognized.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Reconstruction round-trips: scaffold a real project, then reconstruct its
+    // Selection and assert it matches what generated it.
+    // -----------------------------------------------------------------------
+
+    fn a(role: Role, tool: &str) -> RoleAssignment {
+        RoleAssignment {
+            role,
+            tool_id: tool.into(),
+        }
+    }
+
+    /// Scaffold `selection` into `<tmp>/<name>` and reconstruct it back. The
+    /// project is generated into a dir named after the project so the recovered
+    /// `project_name` (derived from the dir) round-trips too.
+    fn roundtrip(assignments: Vec<RoleAssignment>, network: Network, nix: bool) -> Reconstructed {
+        let reg = registry();
+        let sel = Selection {
+            project_name: "my-protocol".to_string(),
+            assignments,
+            network,
+            nix,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(&sel.project_name);
+        crate::scaffold::scaffold(&sel, &reg, &root).unwrap();
+        // reconstruct reads eagerly, so it's safe to let `tmp` drop afterwards.
+        reconstruct(&root, &reg)
+    }
+
+    /// Assignments compared as a set (planner order is not canonical in a
+    /// `Selection`; the plan sorts at generation time).
+    fn assert_same_assignments(mut got: Vec<RoleAssignment>, mut want: Vec<RoleAssignment>) {
+        let key = |r: &RoleAssignment| (r.role.as_kebab(), r.tool_id.clone());
+        got.sort_by_key(&key);
+        want.sort_by_key(&key);
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn reconstruct_aiken_and_meshjs() {
+        let r = roundtrip(
+            vec![a(Role::OnChain, "aiken"), a(Role::OffChain, "meshjs")],
+            Network::Preview,
+            false,
+        );
+        assert!(r.unrecognized.is_empty());
+        assert!(r.low_confidence.is_empty(), "{:?}", r.low_confidence);
+        assert_eq!(r.selection.project_name, "my-protocol");
+        assert_eq!(r.selection.network, Network::Preview);
+        assert!(!r.selection.nix);
+        assert_same_assignments(
+            r.selection.assignments,
+            vec![a(Role::OnChain, "aiken"), a(Role::OffChain, "meshjs")],
+        );
+    }
+
+    #[test]
+    fn reconstruct_recovers_infra_provider_set() {
+        // The scan collapses infra to one driver marker; reconstruction must
+        // recover the individual providers from infra/Justfile.
+        let r = roundtrip(
+            vec![
+                a(Role::OnChain, "aiken"),
+                a(Role::Infrastructure, "kupo"),
+                a(Role::Infrastructure, "ogmios"),
+            ],
+            Network::Preview,
+            false,
+        );
+        assert!(r.unknown_infra.is_empty());
+        assert_same_assignments(
+            r.selection.assignments,
+            vec![
+                a(Role::OnChain, "aiken"),
+                a(Role::Infrastructure, "kupo"),
+                a(Role::Infrastructure, "ogmios"),
+            ],
+        );
+    }
+
+    #[test]
+    fn reconstruct_expands_fullstack_protocol() {
+        // scalus fills both roles via [fullstack]; the fused protocol/ must
+        // round-trip to the two assignments the planner re-collapses.
+        let r = roundtrip(
+            vec![a(Role::OnChain, "scalus"), a(Role::OffChain, "scalus")],
+            Network::Preview,
+            false,
+        );
+        assert!(r.unrecognized.is_empty());
+        assert_same_assignments(
+            r.selection.assignments,
+            vec![a(Role::OnChain, "scalus"), a(Role::OffChain, "scalus")],
+        );
+    }
+
+    #[test]
+    fn reconstruct_recovers_network_and_nix() {
+        let r = roundtrip(vec![a(Role::OnChain, "aiken")], Network::Preprod, true);
+        assert_eq!(r.selection.network, Network::Preprod);
+        assert!(r.selection.nix);
+        assert!(r.low_confidence.is_empty(), "{:?}", r.low_confidence);
+    }
+
+    #[test]
+    fn reconstruct_missing_env_flags_network_low_confidence() {
+        // A project with a role dir but no .env: network can't be recovered.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("on-chain")).unwrap();
+        fs::write(root.join("on-chain/aiken.toml"), "").unwrap();
+
+        let r = reconstruct(root, &registry());
+        assert_eq!(r.selection.network, Network::Preview);
+        assert!(r.low_confidence.contains(&"network"));
     }
 }
