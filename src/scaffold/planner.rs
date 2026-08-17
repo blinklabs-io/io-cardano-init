@@ -245,8 +245,7 @@ pub fn plan(selection: &Selection, registry: &Registry) -> Result<FilePlan, Scaf
     // share one driver template (`_infra/cardano-up`) emitted once at `infra/`,
     // rendered over the full set via `TemplateContext.infra_tools`. The shared
     // template's manifest is read on the first infra assignment; the rest are
-    // skipped (they are contiguous after the canonical sort). See the
-    // infra-via-cardano-up proposal §4–§6.
+    // skipped (they are contiguous after the canonical sort). See TECH_SPEC §6.1.
     let mut infra_template: Option<String> = None;
 
     for assignment in ordered {

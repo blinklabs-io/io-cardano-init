@@ -28,7 +28,7 @@ pub const BASE_DEP: &str = "just";
 /// Synthetic component id the project scan reports for the aggregated `infra/`
 /// component (which has no per-tool subdirs to identify). It represents the
 /// cardano-up driver; its required deps are the union of all infra tools'
-/// `system_deps` (infra-via-cardano-up proposal §9.3).
+/// `system_deps` (TECH_SPEC §9.6).
 pub const INFRA_DRIVER_ID: &str = "cardano-up";
 
 // ---------------------------------------------------------------------------

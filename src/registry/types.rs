@@ -188,8 +188,7 @@ pub struct RoleConfig {
 /// A single `cardano-up context env` output → contract `.env` key mapping,
 /// declared by an infrastructure tool (`[[infra.env]]`). `from` is the
 /// `cardano-up` output var name (e.g. `KUPO_URL`); `to` is the `.env` key the
-/// generated infra component writes (e.g. `INDEXER_URL`). See the
-/// infra-via-cardano-up proposal §5.1.
+/// generated infra component writes (e.g. `INDEXER_URL`). See TECH_SPEC §3.2.
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvMapping {
     pub from: String,

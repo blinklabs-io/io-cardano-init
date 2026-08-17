@@ -165,7 +165,7 @@ pub struct ScanResult {
 /// True if `dir` holds the aggregated cardano-up infra driver: a `Justfile`
 /// that references `cardano-up`. The infra component has no per-tool subdirs to
 /// match against `detect` signatures, so it is recognized by this driver marker
-/// (infra-via-cardano-up proposal §9.3).
+/// (TECH_SPEC §9.6).
 fn infra_driver_present(dir: &Path) -> bool {
     std::fs::read_to_string(dir.join("Justfile"))
         .map(|text| text.contains("cardano-up"))

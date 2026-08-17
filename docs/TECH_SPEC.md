@@ -27,7 +27,7 @@ cardano-init add [ROLE_FLAGS]        # add/swap tools in the project in the cwd 
 cardano-init remove [ROLE_FLAGS]     # remove a role / infra provider from the cwd project
 ```
 
-The `add`/`remove` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix live in `docs/proposals/updating-project-tooling.md`.
+The `add`/`remove` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix are in §16.
 
 `--format human|json` (planned) is a global flag; default `human`. `json` **implies non-interactive**: it never prompts; if required input is missing it errors instead.
 
@@ -181,7 +181,7 @@ normal blueprint-file seam.)
 Tools filling the **infrastructure** role additionally require an `[infra]` table
 (validated at load: `[roles.infrastructure]` present ⇒ `[infra]` required, else
 `RegistryError::InfraConfigMissing`). It declares the `cardano-up` package and the
-output→`.env`-key mappings the aggregated driver writes (see the infra-via-cardano-up proposal):
+output→`.env`-key mappings the aggregated driver writes:
 
 ```toml
 [roles.infrastructure]
@@ -778,3 +778,148 @@ The command-string the UI emits, and the previewed tree, must equal what the CLI
 
 - **OD-1: Hosted web strategy** (WASM core vs. static-JSON+JS preview): ARCHITECTURE
   §10.2. The only open architectural decision; affects §13 hosted delivery.
+
+---
+
+## 16. In-place project updates (`add` / `remove`)
+
+`cardano-init add`/`remove` edit an **already-generated** project's role/tool composition in the current directory: they add, remove, or replace whole component folders and re-wire the shared top-level files. This is deliberately **not** version management (PRD §5.2): it never pins, upgrades, or migrates the *tooling itself*, and it never rewrites the user's code inside a component it keeps. The change is expressed as a mutation of the project's `Selection`, then applied under a git safety net.
+
+Modules (purity invariant intact, ARCHITECTURE §2): reconstruction is the impure edge in `doctor::probe::reconstruct` (reads the tree); the change-set is pure logic in `scaffold::update`; the disk side effect is `scaffold::writer::apply_update`; the CLI orchestration is `cli::update`. The validation gates are the same pure functions `init` uses (`registry::compat::check`, the experimental predicate), run on the *resulting* selection.
+
+### 16.1 The model: components vs the shared layer
+
+Every generated project is exactly two things, and the update engine treats them differently.
+
+**Component slots** — one directory per contract role, plus the fused `protocol/` slot (`contract::DIR_*`):
+
+| Slot | Dir | Multiplicity | On change |
+|------|-----|--------------|-----------|
+| on-chain | `on-chain/` | one tool | replace dir |
+| off-chain | `off-chain/` | one tool | replace dir |
+| infrastructure | `infra/` | **many tools, one aggregated dir** | re-render in place |
+| devnet | `devnet/` | one tool | replace dir |
+| formal-methods | `formal-methods/` | one tool | replace dir |
+| protocol (fused) | `protocol/` | one fullstack tool | replace dir |
+
+A component is **self-contained and standalone** (§7): its rendered content does not depend on which sibling roles are present. This is the load-bearing guarantee — **a slot whose tool is unchanged is never touched** (§16.4).
+
+**Shared layer** — top-level files derived from the *whole* selection, re-rendered on any change: `Justfile`, `.env`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, and (under `--nix`) `flake.nix` / `.envrc`, plus the `blueprint/.gitkeep` marker.
+
+The update is: **reconstruct → confirm → mutate → validate → diff the slots → re-render the shared layer → write under a git safety net.**
+
+### 16.2 Reconstructing the current `Selection` (detection, not a manifest)
+
+An update needs the project's current `Selection` as its base state. Rather than persist a manifest at scaffold time, it **reconstructs by detection** — the same choice `doctor` makes (§9.6): the project's structure *is* the source of truth, so there is no second source that can silently drift from the tree. Every field of `Selection` is recoverable, and the one historically "lossy" field — the infra provider set — is present verbatim in `infra/Justfile`.
+
+`reconstruct(root, registry)` extends `probe::scan_project` and yields a best-effort selection plus the items it could not identify:
+
+```
+reconstruct(root, registry) -> Reconstructed {
+    selection: Selection,          // best-effort
+    unrecognized: Vec<UnrecognizedDir>,
+    low_confidence: Vec<Field>,    // fields we had to guess
+}
+```
+
+- **Roles & tools** — directly from `scan_project`. Each detected component becomes a `RoleAssignment` (a detected `protocol/` becomes the two assignments `{on-chain→T, off-chain→T}` the planner re-collapses).
+- **Infrastructure providers** — recovered by parsing `infra/Justfile` for `cardano-up install <package>` lines, mapping each `<package>` back to a tool via `ToolDef.infra.cardano_up_package`. Unknown packages are surfaced, not silently dropped.
+- **network** — parsed from `CARDANO_NETWORK=` in `.env`. **nix** — `flake.nix`/`.envrc` present. **project_name** — the root directory name (only ever used to render text; a wrong guess is git-recoverable).
+
+Any field not cleanly recoverable is marked `low_confidence`.
+
+### 16.3 Confirm — the trust boundary
+
+Reconstruction is **never trusted silently**; this is what neutralizes detection's one real risk (recovery logic coupled to generated template text). Before any mutation:
+
+- **Interactive** — the reconstructed selection and any `unrecognized`/`low_confidence` items are shown, and the user confirms or corrects. On a **clean** git tree the applied change is fully reviewable/revertible via `git diff`, so it is written straight away (no confirm prompt — good agent DevX); the prompt appears only when `--force` is overriding a **dirty** tree, where the change cannot be cleanly separated from existing edits.
+- **Non-interactive / `--format json`** — no prompts. The reconstruction must be fully recognized: **any `unrecognized` dir is a hard error** (`project_unrecognized`, exit 2). The tool never guesses in automation.
+
+### 16.4 Validate the mutated selection
+
+The mutation produces `S_new`, run through **exactly the same gates as `init`** — no new validation logic:
+
+- **Role uniqueness** — one tool per non-infra role; infra repeatable and deduped keep-first (§3.4), so "add an infra provider already present" is an idempotent no-op.
+- **At least one role** — removing the last role is refused (`no_roles_selected`); a project is never left empty.
+- **Compatibility gate** — `registry::compat::check(S_new.assignments, registry)` (§3.2.2). The gate runs on the *result*, not the delta: adding Dolos to an Evolution project, or swapping MeshJS→Tx3 next to a Yaci devnet, must trip the same check a fresh scaffold would. Stops with `incompatible_tools` unless `--ignore-warning`.
+- **Experimental gate** — if `S_new` newly includes an experimental tool, require `--allow-experimental` / interactive confirm (§3.2.1; `experimental_not_allowed`).
+
+Because `Selection`-validity is by construction (ARCHITECTURE §3.3), a validated `S_new` is indistinguishable from one `init` would have built.
+
+### 16.5 The change set
+
+Pure logic over `S_old`, `S_new`, and the registry (`scaffold::update`, beside the planner). For each **slot**, compare the tool in `S_old` vs `S_new`:
+
+| Transition | Action |
+|-----------|--------|
+| absent → present | **CREATE**: plan+render that component into its dir. Precondition: the dir must not already exist on disk; if it does (a foreign/unrecognized dir), abort (`slot_occupied`). |
+| present → absent | **REMOVE**: `rm -rf <dir>` (removes user-added files in that dir too — intentional; git is the net). |
+| present → present, tool changed | **REPLACE**: REMOVE then CREATE. |
+| present → present, tool same (non-infra) | **KEEP** — never touched. |
+| infra: provider set changed (dir stays) | **RE-RENDER IN PLACE**: overwrite `infra/`'s managed files (`Justfile`, `README.md`, `scripts/write-env.sh`) from the new provider set. |
+| infra → empty | **REMOVE** `infra/`. |
+
+**Fusion boundary** is just rows in this table — no special "migration":
+- two dirs (`on-chain`+`off-chain`) → fullstack tool = REMOVE both + CREATE `protocol/` (a full replace; nothing is carried over — the code in the two dirs is deleted, loudly, git-recoverable).
+- `protocol/` → separate tools = REMOVE `protocol/` + CREATE the new dir(s). "Drop the off-chain half of a fused `protocol/`" is expressed as *replace `protocol/` with an on-chain tool* — the user must name that tool; there is no in-place split of a fused codebase.
+
+**Shared layer** is always recomputed from `S_new` and written **per-file with a content diff** — a file is only rewritten if its bytes change (so a slot swap that doesn't alter, say, `.gitignore` leaves it alone). `blueprint/.gitkeep` is added/removed to match the predicate `any(role != Infrastructure)` (§6.2); `flake.nix`/`.envrc` follow the nix flag.
+
+**The "unchanged slot is safe" guarantee.** Removing off-chain from `{on-chain→aiken, off-chain→meshjs}`: on-chain is `KEEP` (same tool), so `on-chain/` is never in the write set; the standalone-component contract guarantees aiken's render doesn't depend on the removed sibling, so even the content diff shows no change. Only `off-chain/` is removed and the shared layer re-wired.
+
+### 16.6 Safety, write ordering & dry-run
+
+`init`'s writer assumes an empty dir (§6.4, "no `--force`, never overwrites"). Updating writes into a **populated, user-owned** tree, so the update path adds guards *around* the writer rather than changing `init`'s policy:
+
+- **Git safety net (required).** The update refuses to run on a **dirty** working tree so every create/overwrite/delete is reviewable and revertible via `git diff` / `git restore` (`worktree_dirty`, exit 1). Overridable with `--force`. A **non-git** project is treated like a dirty tree: refuse unless `--force`. New projects are git-initialized with an initial commit at scaffold time so the net works immediately.
+- **No merge engine.** Managed/shared files are overwritten outright; the user reconciles any hand-edits through git. There is no three-way merge and no `.new` shadow files.
+- **Write ordering (crash-safety).** (1) create & overwrite all new/changed files; (2) `rm -rf` removed/replaced dirs; (3) nothing else to persist (no manifest). A crash mid-run can leave *extra* files but never loses a kept component; re-running is idempotent.
+- **`--dry-run`.** Prints the change set (CREATE / REMOVE / REPLACE / RE-RENDER / shared-file overwrites) and writes nothing — the auditable plan for humans and agents. `--format json` emits the same as structured data. Each change row names the tool that moved (e.g. `replace Aiken → Scalus`, `add Kupo`, infra `+Dolos`/`-Kupo`).
+
+### 16.7 CLI surface
+
+```
+cardano-init add    --off-chain tx3    # add/replace a slot (same flag vocabulary as init)
+cardano-init add    --infra ogmios     # repeatable; dedup keep-first
+cardano-init remove --off-chain        # drop a role (by role, not tool)
+cardano-init remove --infra kupo       # drop one infra provider
+```
+
+- `add`/`remove` reuse `oneshot`'s per-role flag parsing and validation verbatim. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`.
+- Global flags honored: `--dry-run`, `--ignore-warning`, `--allow-experimental`, `--format`, plus `--force`.
+- Deliberately **not** a `swap` verb: an `add --off-chain X` onto an occupied off-chain slot *is* the swap (REPLACE), reported as such in the diff so it is never silent.
+- An interactive `edit` (re-open the selector seeded from the detected stack) was considered and **dropped** as low-value — `add`/`remove` (with `--dry-run`) already cover editing the stack.
+
+### 16.8 Edge-case matrix (update path)
+
+Error codes are defined in §2.5. This extends the init matrix (§12) for `add`/`remove`.
+
+| # | Situation | Handling |
+|---|-----------|----------|
+| 1 | Add a role not present | CREATE new dir + re-wire shared layer. |
+| 2 | Add a tool to an occupied non-infra slot | REPLACE (remove+create); shown as a swap in the diff; destructive → git-gated. |
+| 3 | Add an infra provider already present | Dedup keep-first → `nothing_to_change` (idempotent). |
+| 4 | Remove a role that isn't present | `nothing_to_change`. |
+| 5 | Remove the **last** non-infra role | Allowed; `blueprint/.gitkeep` dropped (predicate flips). |
+| 6 | Remove on-chain while consumers remain | Allowed; consumers already degrade gracefully per contract (§7) when `blueprint/plutus.json` is absent. |
+| 7 | Remove the last remaining role | Refused — `no_roles_selected`. |
+| 8 | Swap that breaks off-chain↔provider compat | `incompatible_tools` unless `--ignore-warning` (gate on `S_new`). |
+| 9 | Add/swap in an experimental tool | `experimental_not_allowed` unless `--allow-experimental`. |
+| 10 | Two dirs → fullstack tool (fuse) | REMOVE `on-chain/`+`off-chain/`, CREATE `protocol/`. Full replace, git-recoverable; not a merge. |
+| 11 | `protocol/` → drop off-chain half | REPLACE `protocol/` with a user-named on-chain tool; no in-place split. |
+| 12 | Same tool on both roles, no `[fullstack]` | Two separate dirs (not fused); each removable independently. |
+| 13 | Infra provider set changes | RE-RENDER `infra/` in place from the new set; other slots untouched. |
+| 14 | Unchanged slot (e.g. Aiken while off-chain changes) | KEEP — provably untouched (§16.5). |
+| 15 | Unrecognized/renamed/foreign component dir | Interactive: surface for correction. Non-interactive: `project_unrecognized` (fatal). |
+| 16 | Ambiguous detection (2+ tools match one dir) | Treated as unrecognized (existing `scan_project` behavior). |
+| 17 | `infra/Justfile` hand-edited so providers unparseable | Recovered set shown in confirm; user corrects; non-interactive → treat as unrecognized. |
+| 18 | Unknown `cardano-up` package in `infra/Justfile` | Surfaced, not dropped; user confirms/removes. |
+| 19 | `.env` missing/edited `CARDANO_NETWORK` | Field marked low-confidence; asked/defaulted in confirm. |
+| 20 | Dirty git tree / not a git repo | `worktree_dirty` unless `--force`. |
+| 21 | Crash mid-write | Creates-before-deletes ordering → no kept component lost; re-run is idempotent. |
+| 22 | `--dry-run` | Prints the change set; writes nothing. |
+| 23 | Slot swap that leaves a shared file byte-identical | Content diff skips it — no spurious rewrite. |
+
+### 16.9 Determinism
+
+Determinism (§11) is preserved: reconstruction + canonical planning are deterministic, so `--dry-run` output and the applied change set are reproducible for a given `(binary, tree, mutation)`.
