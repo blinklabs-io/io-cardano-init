@@ -131,7 +131,22 @@ pub fn build_context(
     // the planner) from the same shared helper so context and plan agree.
     let fullstack_id = super::planner::fullstack_tool_id(selection, registry);
 
-    for assignment in &selection.assignments {
+    // Walk assignments in canonical order (Role::ALL, then tool id) rather than
+    // the order they were supplied/added, so every order-sensitive field derived
+    // below is reproducible for a given selection (§11). Without this, `nix_packages`
+    // — accumulated in first-encountered order — would differ between a fresh
+    // scaffold (assignments already canonical) and the same selection reached via
+    // `add` (which appends), yielding a byte-different `flake.nix`.
+    let mut ordered_assignments: Vec<&_> = selection.assignments.iter().collect();
+    ordered_assignments.sort_by_key(|a| {
+        let role_idx = Role::ALL
+            .iter()
+            .position(|r| *r == a.role)
+            .expect("role is in Role::ALL");
+        (role_idx, a.tool_id.clone())
+    });
+
+    for assignment in ordered_assignments {
         let tool =
             registry
                 .get(&assignment.tool_id)
@@ -505,6 +520,34 @@ mod tests {
         }]);
         let ctx = build_context(&sel, &registry()).unwrap();
         assert!(ctx.nix_packages.contains(&"aiken".to_string()));
+    }
+
+    #[test]
+    fn nix_packages_order_is_assignment_order_independent() {
+        // The same logical selection reached in a different assignment order (e.g.
+        // a fresh scaffold vs. one built up via `add`) must yield the identical
+        // `nix_packages` list, or `flake.nix` would differ byte-for-byte for equal
+        // inputs (determinism contract, §11). Regression test for #65.
+        let on_chain = || RoleAssignment {
+            role: Role::OnChain,
+            tool_id: "aiken".into(),
+        };
+        let off_chain = || RoleAssignment {
+            role: Role::OffChain,
+            tool_id: "meshjs".into(),
+        };
+
+        let canonical =
+            build_context(&selection(vec![on_chain(), off_chain()]), &registry()).unwrap();
+        // Reversed order, as an `add` of the on-chain role onto an off-chain-only
+        // project would produce (append, not canonical insert).
+        let reversed =
+            build_context(&selection(vec![off_chain(), on_chain()]), &registry()).unwrap();
+
+        assert_eq!(canonical.nix_packages, reversed.nix_packages);
+        // And the canonical order is Role::ALL order: on-chain (aiken) before
+        // off-chain (nodejs).
+        assert_eq!(canonical.nix_packages, vec!["aiken", "nodejs"]);
     }
 
     #[test]
