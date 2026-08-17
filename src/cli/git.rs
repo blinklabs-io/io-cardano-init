@@ -1,6 +1,6 @@
 //! Small git helpers for the CLI edge — the only place the tool shells out to
 //! `git`. Used by the update commands' clean-tree gate and by init to give a new
-//! project a repo + initial commit (so `add`/`remove`/`edit` work immediately).
+//! project a repo + initial commit (so `add`/`remove` work immediately).
 
 use std::path::Path;
 use std::process::{Command, Output};

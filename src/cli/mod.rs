@@ -64,7 +64,7 @@ pub enum Command {
     Remove(RemoveArgs),
 }
 
-/// Flags shared by the update commands (add / remove / edit).
+/// Flags shared by the update commands (add / remove).
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct UpdateFlags {
     /// Show the change set without writing anything
@@ -351,7 +351,7 @@ pub enum CliError {
     #[diagnostic(
         code(cardano_init::project_unrecognized),
         help(
-            "run add/remove/edit inside a generated project; fix or rename any renamed/foreign component directories first."
+            "run add/remove inside a generated project; fix or rename any renamed/foreign component directories first."
         )
     )]
     ProjectUnrecognized { dirs: Vec<String> },
@@ -376,7 +376,7 @@ pub enum CliError {
     #[diagnostic(
         code(cardano_init::nothing_to_change),
         help(
-            "pass a different tool/role, or run `cardano-init edit` to change the stack interactively."
+            "pass a different tool/role, or use `cardano-init add`/`remove` to change the stack."
         )
     )]
     NothingToChange,
@@ -895,7 +895,7 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
         crate::scaffold::scaffold(&selection, registry, &root)
     })?;
 
-    // Give the new project a git repo + initial commit, so `add`/`remove`/`edit`
+    // Give the new project a git repo + initial commit, so `add`/`remove`
     // have a clean tree to diff against out of the box. Best-effort: skips when
     // git is absent or we're already inside a repo, never fails generation.
     let git = git::init_project_repo(&root);

@@ -818,7 +818,8 @@ An update needs the project's current `Selection` as its base state. Rather than
 reconstruct(root, registry) -> Reconstructed {
     selection: Selection,          // best-effort
     unrecognized: Vec<UnrecognizedDir>,
-    low_confidence: Vec<Field>,    // fields we had to guess
+    low_confidence: Vec<Field>,    // fields we had to guess (e.g. network, infra)
+    unknown_infra: Vec<String>,    // cardano-up packages not in the registry
 }
 ```
 
@@ -873,7 +874,7 @@ Pure logic over `S_old`, `S_new`, and the registry (`scaffold::update`, beside t
 
 - **Git safety net (required).** The update refuses to run on a **dirty** working tree so every create/overwrite/delete is reviewable and revertible via `git diff` / `git restore` (`worktree_dirty`, exit 1). Overridable with `--force`. A **non-git** project is treated like a dirty tree: refuse unless `--force`. New projects are git-initialized with an initial commit at scaffold time so the net works immediately.
 - **No merge engine.** Managed/shared files are overwritten outright; the user reconciles any hand-edits through git. There is no three-way merge and no `.new` shadow files.
-- **Write ordering (crash-safety).** (1) create & overwrite all new/changed files; (2) `rm -rf` removed/replaced dirs; (3) nothing else to persist (no manifest). A crash mid-run can leave *extra* files but never loses a kept component; re-running is idempotent.
+- **Write ordering.** `apply_update` (1) `rm -rf`s the `Remove`/`Replace` dirs first — so a `Replace` clears the old tool's files before the new ones are written into the same path; then (2) writes the created/replaced/re-rendered component files; then (3) overwrites only the shared files whose bytes changed. There is nothing else to persist (no manifest). **Kept components are never in the plan**, so user work in an unchanged slot is untouched wherever a crash lands; a crash mid-rewrite of a *changed* slot is covered by the git safety net, and re-running is idempotent.
 - **`--dry-run`.** Prints the change set (CREATE / REMOVE / REPLACE / RE-RENDER / shared-file overwrites) and writes nothing — the auditable plan for humans and agents. `--format json` emits the same as structured data. Each change row names the tool that moved (e.g. `replace Aiken → Scalus`, `add Kupo`, infra `+Dolos`/`-Kupo`).
 
 ### 16.7 CLI surface
@@ -910,7 +911,7 @@ Error codes are defined in §2.5. This extends the init matrix (§12) for `add`/
 | 12 | Same tool on both roles, no `[fullstack]` | Two separate dirs (not fused); each removable independently. |
 | 13 | Infra provider set changes | RE-RENDER `infra/` in place from the new set; other slots untouched. |
 | 14 | Unchanged slot (e.g. Aiken while off-chain changes) | KEEP — provably untouched (§16.5). |
-| 15 | Unrecognized/renamed/foreign component dir | Interactive: surface for correction. Non-interactive: `project_unrecognized` (fatal). |
+| 15 | Unrecognized/renamed/foreign component dir | Interactive: surfaced, then a confirm to proceed with the detected stack (the odd dir is left in place, ignored). Non-interactive: `project_unrecognized` (fatal). |
 | 16 | Ambiguous detection (2+ tools match one dir) | Treated as unrecognized (existing `scan_project` behavior). |
 | 17 | `infra/Justfile` hand-edited so providers unparseable | Recovered set shown in confirm; user corrects; non-interactive → treat as unrecognized. |
 | 18 | Unknown `cardano-up` package in `infra/Justfile` | Surfaced, not dropped; user confirms/removes. |

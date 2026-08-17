@@ -1,4 +1,4 @@
-//! The `add` / `remove` / `edit` commands: edit an existing project's role/tool
+//! The `add` / `remove` commands: edit an existing project's role/tool
 //! set in place. Impure edge — reconstructs the current selection from the tree
 //! (via `doctor::probe`), mutates it, then diffs and writes with `scaffold`.
 //!
@@ -137,7 +137,7 @@ fn detect_selection(
 }
 
 /// Validate the mutated selection, then plan → (dry-run | git-gate + confirm +
-/// apply) → report. Shared by add/remove/edit.
+/// apply) → report. Shared by add/remove.
 fn finish_update(
     cwd: &Path,
     old: Selection,

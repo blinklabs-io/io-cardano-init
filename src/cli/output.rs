@@ -635,7 +635,7 @@ pub fn print_success(
 }
 
 // ---------------------------------------------------------------------------
-// Update (add / remove / edit) presenters
+// Update (add / remove) presenters
 // ---------------------------------------------------------------------------
 
 /// Bucket an [`UpdatePlan`]'s slot ops into (create, replace, rerender, remove)
@@ -863,7 +863,7 @@ fn print_git_note(git: crate::cli::git::InitOutcome) {
         ),
         InitOutcome::GitMissing => println!(
             "  {}",
-            theme::dim("git not found — skipped repo setup (edit commands want a clean git tree)")
+            theme::dim("git not found — skipped repo setup (add/remove want a clean git tree)")
         ),
         InitOutcome::AlreadyRepo => {} // inside an existing repo — leave it alone
     }
