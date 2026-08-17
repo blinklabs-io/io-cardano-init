@@ -178,6 +178,22 @@ fn slots(sel: &Selection, registry: &Registry) -> BTreeMap<String, SlotTool> {
     map
 }
 
+/// The tool id(s) occupying each component directory in `sel`, keyed by dir and
+/// sorted within each slot. Public so the CLI can name *which tool* changed in a
+/// slot op, not merely which directory moved.
+pub fn slot_tools(sel: &Selection, registry: &Registry) -> BTreeMap<String, Vec<String>> {
+    slots(sel, registry)
+        .into_iter()
+        .map(|(dir, tool)| {
+            let ids = match tool {
+                SlotTool::Single(id) => vec![id],
+                SlotTool::Infra(set) => set.into_iter().collect(),
+            };
+            (dir, ids)
+        })
+        .collect()
+}
+
 /// Compute the change set between two selections. Pure: renders only from
 /// embedded assets, touches no disk.
 pub fn plan_update(

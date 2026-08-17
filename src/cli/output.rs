@@ -8,7 +8,7 @@ use crate::doctor::probe::{Environment, ScanResult};
 use crate::registry::loader::Registry;
 use crate::registry::types::{Role, Selection, ToolDef};
 use crate::scaffold::planner::FilePlan;
-use crate::scaffold::update::{SlotOp, UpdatePlan};
+use crate::scaffold::update::{self, SlotOp, UpdatePlan};
 
 // ---------------------------------------------------------------------------
 // JSON envelope (TECH_SPEC §2.4)
@@ -673,10 +673,43 @@ fn changes_json(plan: &UpdatePlan) -> serde_json::Value {
     })
 }
 
-/// The styled `+ dir/ (would add)` rows for the change panel. `applied` swaps
-/// "would X" (preview) for "X" (result).
-fn update_change_rows(plan: &UpdatePlan, applied: bool) -> Vec<String> {
-    let (create, replace, rerender, remove) = update_change_buckets(plan);
+/// Map a slot's tool ids to their display names (falling back to the id when a
+/// tool isn't in the registry), so the change panel names the tool, not just the
+/// directory.
+fn tool_names(ids: &[String], registry: &Registry) -> Vec<String> {
+    ids.iter()
+        .map(|id| {
+            registry
+                .get(id)
+                .map_or_else(|| id.clone(), |t| t.name.clone())
+        })
+        .collect()
+}
+
+/// Describe an infra re-render as the provider-set delta (`+Ogmios`, `-Kupo`),
+/// so a mixed add/remove of providers reads at a glance.
+fn infra_detail(from: &[String], to: &[String]) -> String {
+    let mut parts = Vec::new();
+    for t in to.iter().filter(|t| !from.contains(t)) {
+        parts.push(format!("+{t}"));
+    }
+    for f in from.iter().filter(|f| !to.contains(f)) {
+        parts.push(format!("-{f}"));
+    }
+    parts.join(", ")
+}
+
+/// The styled `+ dir/ add <tool>` rows for the change panel, naming the tool that
+/// changed in each slot. `applied` swaps "would X" (preview) for "X" (result).
+fn update_change_rows(
+    old: &Selection,
+    new: &Selection,
+    plan: &UpdatePlan,
+    registry: &Registry,
+    applied: bool,
+) -> Vec<String> {
+    let old_tools = update::slot_tools(old, registry);
+    let new_tools = update::slot_tools(new, registry);
     let verb = |s: &str| {
         if applied {
             s.to_string()
@@ -684,38 +717,41 @@ fn update_change_rows(plan: &UpdatePlan, applied: bool) -> Vec<String> {
             format!("would {s}")
         }
     };
+    let names = |map: &std::collections::BTreeMap<String, Vec<String>>, dir: &str| {
+        map.get(dir)
+            .map(|ids| tool_names(ids, registry))
+            .unwrap_or_default()
+    };
+
     let mut rows = Vec::new();
-    for d in &create {
-        rows.push(format!(
-            "{}  {}/  {}",
-            theme::good("+"),
-            d,
-            theme::dim(verb("add"))
-        ));
-    }
-    for d in &replace {
-        rows.push(format!(
-            "{}  {}/  {}",
-            theme::warn("~"),
-            d,
-            theme::dim(verb("replace"))
-        ));
-    }
-    for d in &rerender {
-        rows.push(format!(
-            "{}  {}/  {}",
-            theme::warn("~"),
-            d,
-            theme::dim(verb("update"))
-        ));
-    }
-    for d in &remove {
-        rows.push(format!(
-            "{}  {}/  {}",
-            theme::warn_strong("-"),
-            d,
-            theme::dim(verb("remove"))
-        ));
+    for op in &plan.slot_ops {
+        let dir = op.dir().to_string_lossy().into_owned();
+        let from = names(&old_tools, &dir);
+        let to = names(&new_tools, &dir);
+        let (mark, detail) = match op {
+            SlotOp::Create(_) => (
+                theme::good("+"),
+                format!("{} {}", verb("add"), to.join(", ")),
+            ),
+            SlotOp::Replace(_) => (
+                theme::warn("~"),
+                format!(
+                    "{} {} → {}",
+                    verb("replace"),
+                    from.join(", "),
+                    to.join(", ")
+                ),
+            ),
+            SlotOp::RerenderInfra(_) => (
+                theme::warn("~"),
+                format!("{} {}", verb("update"), infra_detail(&from, &to)),
+            ),
+            SlotOp::Remove(_) => (
+                theme::warn_strong("-"),
+                format!("{} {}", verb("remove"), from.join(", ")),
+            ),
+        };
+        rows.push(format!("{}  {}/  {}", mark, dir, theme::dim(detail)));
     }
     for f in &plan.shared_removals {
         rows.push(format!(
@@ -732,11 +768,18 @@ fn update_change_rows(plan: &UpdatePlan, applied: bool) -> Vec<String> {
     rows
 }
 
-/// Preview an update (`--dry-run`): the change set, nothing written.
-pub fn print_update_plan(project_name: &str, plan: &UpdatePlan, format: Format) {
+/// Preview an update (`--dry-run`, or the confirm on a forced dirty tree): the
+/// change set, nothing written.
+pub fn print_update_plan(
+    old: &Selection,
+    new: &Selection,
+    plan: &UpdatePlan,
+    registry: &Registry,
+    format: Format,
+) {
     if format == Format::Json {
         emit_json_ok(json!({
-            "project": project_name,
+            "project": new.project_name,
             "applied": false,
             "dry_run": true,
             "changes": changes_json(plan),
@@ -746,9 +789,9 @@ pub fn print_update_plan(project_name: &str, plan: &UpdatePlan, format: Format) 
 
     println!();
     print_panel(
-        project_name,
+        &new.project_name,
         Some(theme::badge_warn("PLAN")),
-        &update_change_rows(plan, false),
+        &update_change_rows(old, new, plan, registry, false),
     );
     println!();
     println!(
@@ -761,6 +804,7 @@ pub fn print_update_plan(project_name: &str, plan: &UpdatePlan, format: Format) 
 /// Report a completed update, with the dependency check-and-advise for the new
 /// selection (a newly-added tool may pull in new deps).
 pub fn print_update_success(
+    old: &Selection,
     selection: &Selection,
     registry: &Registry,
     plan: &UpdatePlan,
@@ -784,7 +828,7 @@ pub fn print_update_success(
     print_panel(
         &selection.project_name,
         Some(theme::badge_ok("UPDATED")),
-        &update_change_rows(plan, true),
+        &update_change_rows(old, selection, plan, registry, true),
     );
     print_experimental_warning(selection, registry);
     print_dep_advice(report);

@@ -184,21 +184,25 @@ fn finish_update(
     }
 
     if flags.dry_run {
-        output::print_update_plan(&new.project_name, &plan, format);
+        output::print_update_plan(&old, &new, &plan, registry, format);
         return Ok(());
     }
 
     // Git safety net: the change must be reviewable/revertible.
-    if !flags.force && !super::git::is_clean(cwd) {
+    let clean = super::git::is_clean(cwd);
+    if !flags.force && !clean {
         return Err(CliError::WorktreeDirty {
             path: cwd.display().to_string(),
         });
     }
 
-    // Human confirm: show the change set, then ask.
-    if format == Format::Human {
-        output::print_update_plan(&new.project_name, &plan, format);
-        if !confirm("Apply this update?", true)? {
+    // A clean tree makes the whole change reviewable and revertible with git, so
+    // apply it straight away — no prompt (good agent DevX). Only pause to confirm
+    // when `--force` is overriding a dirty tree, where the update can't be cleanly
+    // undone; there we show the plan first, then ask.
+    if format == Format::Human && !clean {
+        output::print_update_plan(&old, &new, &plan, registry, format);
+        if !confirm("Apply this update to a dirty working tree?", true)? {
             return Err(CliError::Aborted);
         }
     }
@@ -206,7 +210,7 @@ fn finish_update(
     crate::scaffold::writer::apply_update(&plan, cwd)?;
 
     let report = super::resolve_selection_deps(&new, registry)?;
-    output::print_update_success(&new, registry, &plan, &report, format);
+    output::print_update_success(&old, &new, registry, &plan, &report, format);
     Ok(())
 }
 
