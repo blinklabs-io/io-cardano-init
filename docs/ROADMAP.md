@@ -10,8 +10,8 @@
 | Phase | Milestone | Date | Outcome |
 |-------|-----------|------|---------|
 | **0** | **DX.02**: Specs + POC | **31 Aug 2026** | A working, could-be-final tool showing **all five roles**, with specs/architecture/integration strategy, shown to the community + key players for feedback. |
-| **1** | **DX.05**: RC ready | **30 Nov 2026** | Public **Release Candidate**: reduced-stack CLI that builds green, **website + docs**, a dependency **install** command (nice-to-have), hardened CI/CD + tests. |
-| **2** | Post-RC / GA | TBD (post-Nov) | Stabilize RC → GA, widen the stack, WASM live-preview, promote auto-install to supported. |
+| **1** | **DX.05**: RC ready | **30 Nov 2026** | Public **Release Candidate**: reduced-stack CLI that builds green, **docs**, a dependency **install** command (nice-to-have), hardened CI/CD + tests. |
+| **2** | Post-RC / GA | TBD (post-Nov) | Stabilize RC → GA, widen the stack, promote auto-install to supported. |
 | **3** | Later | Unscheduled | Plugin hooks, min-version checks, community-driven scope. |
 
 Deliverables below are tracked as checklists (`[ ]` = not yet done).
@@ -35,13 +35,13 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 - [ ] **Off-chain:** MeshJS + Tx3; both generate and build.
 - [x] **Infrastructure:** filled via `cardano-up` — **Kupo, Ogmios, Dolos, Tx Submit API, Cardano Node, Cardano Node API, and Dingo** ship as selectable providers that aggregate into a single `infra/` component (one cardano-up context per project). Adding further providers is pure data (a registry TOML, no template). Uses `cardano-up`'s released `--context` flag (blinklabs-io#294). Yaci DevKit remains in the **devnet** role (it is a dev/test kit, never deployed).
 - [ ] **Devnet:** Yaci DevKit (local devnet — its `dev` starts a Blockfrost-compatible devnet and writes the standard `.env` connection vars, so off-chain connects to it automatically; `test` runs an integration smoke test).
-- [x] **Formal-methods:** experimental; visible in the registry/UI as "experimental"; Blaster is a WIP upstream tool *and* its integration isn't build-green yet (made real at DX.05). Registry `experimental` flag (per-tool, §3.2.1 — covers unstable-upstream and/or not-build-green) surfaced across `list`/`--help`, interactive, one-shot, and the web builder, and **gated** behind `--allow-experimental` / an interactive confirm so it can't be scaffolded unknowingly; `list`/component JSON carry it for agents.
+- [x] **Formal-methods:** experimental; visible in the registry/UI as "experimental"; Blaster is a WIP upstream tool *and* its integration isn't build-green yet (made real at DX.05). Registry `experimental` flag (per-tool, §3.2.1 — covers unstable-upstream and/or not-build-green) surfaced across `list`/`--help`, interactive, and one-shot, and **gated** behind `--allow-experimental` / an interactive confirm so it can't be scaffolded unknowingly; `list`/component JSON carry it for agents.
 
 **Feature surface:**
 - [ ] Interactive CLI and one-shot CLI (polish; deterministic output).
 - [x] `list` subcommand + global `--format human|json` presenter + machine-readable error codes (agent surface, PRD FR-13/14/15).
 - [x] **`cardano-init doctor`** standalone command + check-and-advise during scaffolding (deps/installer graph, `registry/deps.toml`). *(Pulled earlier than the docs' original deferral.)*
-- [ ] Local web builder (`cardano-init web`), `--dry-run`, optional Nix flake.
+- [ ] `--dry-run`, optional Nix flake.
 - [ ] Determinism canonicalization (planner) + snapshot tests + contract-compliance tests per template.
 
 ### Success criteria
@@ -71,32 +71,30 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 - [ ] Finish **SM-1 (build+test green)** for everything shipped, including any DX.02 relaxations.
 - [ ] **Formal-methods made real** (build-green), promoted from experimental.
 
-**Website + docs (publicly accessible):**
-- [ ] **Docs site:** Comprehensive documentation about usage both for end users. It could be hosted on a dedicated website, or part of Cardano's Developer Portal.
-- [ ] **Static hosted builder**: reads registry JSON, assembles the `cardano-init …` command in plain JS (no binary needed). **OD-1 resolved = static.** The planner-backed live file-tree preview is **deferred** (WASM, post-RC); the command string is the public builder's output.
+**Docs (publicly accessible):**
+- [ ] **Docs site:** Comprehensive documentation about usage for end users. It could be hosted on a dedicated website, or part of Cardano's Developer Portal.
 
 **Dependency install command (nice-to-have, attempted):**
 - [ ] `cardano-init` dependency **install** (auto-install): runs the doctor's resolved plan with consent, across the installer graph (incl. bootstrapping `aikup`/`cardano-up`, etc.). Officially nice-to-have; **first thing cut** if it threatens the RC date.
 
 **Editing an existing project (#26):**
-- [x] `cardano-init add`/`remove`: reconstruct the current selection by detection, diff at the component-directory level, re-wire the shared files, write under a git-clean safety net. Never rewrites user code in a kept component. Reuses the init compat/experimental gates. New projects are git-initialized with an initial commit so the safety net works immediately. See TECH_SPEC §16 (PRD FR-25).
+- [x] `cardano-init add`/`remove`: reconstruct the current selection by detection, diff at the component-directory level, re-wire the shared files, write under a git-clean safety net. Never rewrites user code in a kept component. Reuses the init compat/experimental gates. New projects are git-initialized with an initial commit so the safety net works immediately. See TECH_SPEC §15 (PRD FR-25).
 
 **Engineering hardening:**
 - [ ] **CI/CD pipeline** improvements: per-tool build smoke tests (toolchains or Nix), snapshot/determinism gates, contract-compliance gates, release artifacts.
-- [ ] **Scheduled maintenance smoke run** (weekly cron): re-runs the per-tool build+test matrix to catch generated projects breaking from a hardfork / upstream release / dependency bitrot *between* commits, opening a tracking issue on failure. Distinct from PR gates (ARCHITECTURE §11).
+- [ ] **Scheduled maintenance smoke run** (weekly cron): re-runs the per-tool build+test matrix to catch generated projects breaking from a hardfork / upstream release / dependency bitrot *between* commits, opening a tracking issue on failure. Distinct from PR gates (ARCHITECTURE §10).
 - [ ] Version-update check (pre-generation notice, §10 TECH_SPEC).
 
 ### Success criteria
 
 - Public repo at RC quality (non-critical defects acceptable).
-- Public docs site + static hosted builder, both reachable.
+- Public docs site reachable.
 - CLI creates working projects across the reduced stack, **expandable** (adding a tool is data + template per ADDING_A_TOOL).
 
 ### Cut order (if behind in November)
 
 1. Dependency **auto-install** command (explicitly nice-to-have).
-2. Static hosted builder → fall back to **docs site only** + documented local `cardano-init web`.
-3. The *extra* (second/third) tools per role → ship the DX.02 set, expand post-RC.
+2. The *extra* (second/third) tools per role → ship the DX.02 set, expand post-RC.
 Never cut: the DX.02 build-green stack reaching full SM-1, and public docs.
 
 ---
@@ -106,7 +104,6 @@ Never cut: the DX.02 build-green stack reaching full SM-1, and public docs.
 Direction (unscheduled; shaped by RC feedback):
 - Stabilize RC → **1.0 GA** (defect burndown, version/tagging scheme finalized).
 - **Widen the stack** further: more tools across all roles, deeper coverage.
-- **WASM live-preview** in the hosted builder (OD-1 part A): exact file-tree preview with zero logic duplication.
 - Promote **auto-install** from nice-to-have to a supported path; **cardano-up self-install** when absent.
 
 ## Phase 3: Later (unscheduled)

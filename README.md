@@ -88,9 +88,6 @@ cardano-init --name my-protocol --fullstack scalus
 
 # Preview what would be generated, without writing
 cardano-init --name my-protocol --on-chain aiken --dry-run
-
-# Local web builder (visual configurator → copyable command)
-cardano-init web
 ```
 
 Every generated project is driven by [`just`](https://just.systems): `just build`, `just test`, `just clean` (and per-component `just -f <dir>/Justfile dev` where a watch/daemon mode exists). Missing a toolchain? Run the built-in dependency [`doctor`](docs/ROADMAP.md) and it tells you exactly which installer to use.

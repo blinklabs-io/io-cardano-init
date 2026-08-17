@@ -8,7 +8,7 @@
 
 ## 1. Summary
 
-`cardano-init` is a CLI tool (with a thin web front-end) that scaffolds a complete, runnable Cardano protocol monorepo. The user picks a tool for each functional role they need (on-chain, off-chain, infrastructure, devnet, and other registry-defined roles) and the tool generates a project where every component is already wired together and a small end-to-end example builds and passes its tests out of the box.
+`cardano-init` is a CLI tool that scaffolds a complete, runnable Cardano protocol monorepo. The user picks a tool for each functional role they need (on-chain, off-chain, infrastructure, devnet, and other registry-defined roles) and the tool generates a project where every component is already wired together and a small end-to-end example builds and passes its tests out of the box.
 
 The defining bet is the **interface contract**: every tool template conforms to a shared set of conventions (canonical blueprint path, standard Justfile tasks, standard `.env` variables) so *any* producer composes with *any* consumer without per-pair integration code. Adding a tool is a data change, not a code change.
 
@@ -63,7 +63,7 @@ The PRD commits to two headline metrics. Both are measurable in CI and tied to t
 | # | Metric | Target | Measurement |
 |---|--------|--------|-------------|
 | **SM-1** | **Generated project builds out of the box** | `just build && just test` passes for **every shipped template, verified individually**, with **zero manual edits**. Composition across roles is guaranteed by the interface contract, so combinations are not tested pairwise. | CI scaffolds each tool/template in isolation, then runs build+test with required toolchains present. |
-| **SM-2** | **Time-to-first-working-protocol (TTFP)** | **< 5 minutes** from `cardano-init` (or web "Generate") to a green `just build && just test`. If toolchains are missing and the user accepts the offered install, that path must also complete within ~5 minutes. | Timed walkthrough of a representative selection on a clean machine. Clock excludes nothing the user experiences except their own reading time. |
+| **SM-2** | **Time-to-first-working-protocol (TTFP)** | **< 5 minutes** from `cardano-init` to a green `just build && just test`. If toolchains are missing and the user accepts the offered install, that path must also complete within ~5 minutes. | Timed walkthrough of a representative selection on a clean machine. Clock excludes nothing the user experiences except their own reading time. |
 
 
 **Supporting (tracked, not headline):** tool/role coverage and composability (every advertised role has ≥1 working tool; any on-chain × off-chain combo works without per-pair code); adoption (projects generated, repos that retain the scaffold structure) once the tool is public.
@@ -77,7 +77,7 @@ The PRD commits to two headline metrics. Both are measurable in CI and tied to t
 - **Roles are a fixed, code-defined vocabulary; tools are the open-ended part.** The set of roles is defined in code, not data: the registry *references* roles but cannot introduce them. It is *not* frozen at "four": the current set is on-chain, off-chain, infrastructure, devnet, and formal-methods, and it can grow in a future version via a deliberate code change. **Tools**, by contrast, are fully data-driven: adding one is a registry + template change with no core code change (see [ARCHITECTURE.md](./ARCHITECTURE.md) §3.1).
 - **At least one working tool per advertised role.** No role is advertised with zero working tools. There is no single "golden path" combination: every shipped tool is verified individually and the interface contract guarantees that any combination composes (§7), so combinations are not tested pairwise.
 - **Whatever ships in the registry must work.** Every registered tool is held to the build/contract bar; adding a tool requires adding its tests (§7, SM-1).
-- **Three surfaces**: One-shot CLI, interactive CLI, and web (§6).
+- **Two surfaces**: One-shot CLI and interactive CLI (§6).
 - **Interface contract** enforced mechanically by contract-compliance tests.
 - **Target network is selectable:** `preview` / `preprod` / `mainnet`, defaulting to **`preview`** (the natural starting point for newcomers). The choice is written to `.env` as `CARDANO_NETWORK`, so it is a cheap, late-binding decision, trivially changed after generation.
 - **Dependency doctor (check + advise):** Detect which `system_deps` are missing, detect the OS and available package manager, and print exact install instructions. For the **infrastructure** role, the recommended install path delegates to `cardano-up`.
@@ -90,7 +90,7 @@ These are things users might reasonably expect that we deliberately will **not**
 - **Not a build / deploy / runtime tool.** It scaffolds once and exits. It does not build, deploy, submit transactions, manage keys or wallets, or run the protocol. The generated Justfile delegates to native tools; `cardano-init` is not in the loop after generation.
 - **Not a package or version manager.** It does not pin/upgrade tool versions over time, or manage tool/dependency *versions* after generation. Editing the project's *composition* is supported (see below), but bumping the tooling itself is out of scope. (Off-chain packages are still version-pinned in the generated `package.json` etc.; the user owns them thereafter.)
 
-> **Note — editing an existing project (FR-25):** the project's *role/tool composition* **is** editable after generation via `cardano-init add`/`remove` (swap Aiken→Pebble, add off-chain, drop a role). This adds/removes/replaces whole component folders and re-wires the shared top-level files; it never rewrites user code inside a component it keeps, and it is guarded by a git-clean check so every change is reviewable with `git diff`. It recovers the current selection by **detection** (no metadata file — matching the doctor, TECH_SPEC §9.6). See TECH_SPEC §16. This is deliberately *not* version management (above).
+> **Note — editing an existing project (FR-25):** the project's *role/tool composition* **is** editable after generation via `cardano-init add`/`remove` (swap Aiken→Pebble, add off-chain, drop a role). This adds/removes/replaces whole component folders and re-wires the shared top-level files; it never rewrites user code inside a component it keeps, and it is guarded by a git-clean check so every change is reviewable with `git diff`. It recovers the current selection by **detection** (no metadata file — matching the doctor, TECH_SPEC §9.6). See TECH_SPEC §15. This is deliberately *not* version management (above).
 - **Not a tutorial or learning platform.** Generated READMEs/AGENT.md/docs/skills explain enough to start and link out, but the tool is not a course, interactive tutorial, or docs site. It produces a runnable example, not curriculum.
 - **It does not author tool templates for you.** Adding a tool requires a human to write the template + registry entry and recompile. The tool does not auto-generate templates or scrape tool capabilities.
 
@@ -106,13 +106,12 @@ See [ROADMAP.md](./ROADMAP.md) for sequencing.
 
 ## 6. Surfaces (all v1)
 
-All three surfaces produce identical projects because the CLI is the **single source of truth** for generation. The web UI never generates projects itself.
+Both surfaces produce identical projects because the CLI is the **single source of truth** for generation.
 
 | Surface | Primary persona | Description |
 |---------|-----------------|-------------|
 | **One-shot CLI** | Agent, experienced dev | Fully flag-driven, non-interactive, deterministic. Plus capability discovery (structured registry dump), `--dry-run`, and machine-readable errors. |
 | **Interactive CLI** | Newcomer | Guided flow: explain the domain → multi-select roles → pick a tool per role (with recommendations) → set options → review summary + file tree → confirm. |
-| **Web UI** | Newcomer | A visual configurator (Spring-Initializr-style), available **both as a hosted page and as a local server (`cardano-init serve`)**. Reads the same registry, shows live validation and a previewed file tree, and **outputs a copyable CLI command**. It does not generate locally. The hosted page is the zero-install front door; the local server works offline against the exact installed binary version. |
 
 
 In all cases, there will be extensive explanation on each tooling role, language, when (and when not) to use it, mapping of usecases and common tooling, and other to help both newcommers and LLM agents to choose the right tool for the job without them having to do reasearch on the side.
@@ -159,11 +158,7 @@ Priority: **M** = Must (v1), **S** = Should (v1 if affordable), **C** = Could (l
 - **FR-20 (M):** If dependencies cannot be satisfied, clearly tell the user which to install manually and state that the generated template is otherwise correct and ready once they do.
 - **FR-21 (C):** Offer to **run** the installs with user consent (auto-install). *Nice-to-have, targeted [ROADMAP](./ROADMAP.md) DX.05.*
 - **FR-22 (S):** Expose the doctor as a standalone `cardano-init doctor` subcommand runnable in an existing project. *Targeted DX.02.*
-- **FR-25 (S):** Edit an existing project's role/tool composition via `cardano-init add`/`remove`: reconstruct the current selection by detection, apply the change (add/remove/replace whole component folders, re-wire the shared top-level files), and never touch user code in a kept component. Guarded by a git-clean check (`--force` to override) with a `--dry-run` preview; reuses the init compatibility/experimental gates on the resulting selection. Not version management (§5.2). See TECH_SPEC §16.
-
-### Web UI
-
-- **FR-23 (M):** The web UI reads the same registry, validates selections live, lets the user preview the generated file tree (structure, not file contents), and outputs a copyable `cardano-init …` command. It does not duplicate generation logic.
+- **FR-25 (S):** Edit an existing project's role/tool composition via `cardano-init add`/`remove`: reconstruct the current selection by detection, apply the change (add/remove/replace whole component folders, re-wire the shared top-level files), and never touch user code in a kept component. Guarded by a git-clean check (`--force` to override) with a `--dry-run` preview; reuses the init compatibility/experimental gates on the resulting selection. Not version management (§5.2). See TECH_SPEC §15.
 
 ### Versioning & updates
 
@@ -180,7 +175,7 @@ Priority: **M** = Must (v1), **S** = Should (v1 if affordable), **C** = Could (l
 *As a developer new to Cardano, I want a guided flow that explains the roles and recommends tools, so that I can create a working project without already knowing the ecosystem.*
 
 **Acceptance:**
-- Running `cardano-init` with no arguments enters the interactive or web flow and explains what each role means before asking the user to choose.
+- Running `cardano-init` with no arguments enters the interactive flow and explains what each role means before asking the user to choose.
 - The user can complete the flow selecting only the roles they want.
 - A summary screen shows the full selection and the exact directory tree before anything is written; the user must confirm.
 - On confirmation, the project is generated and the next steps (`cd …`, `just build`) are printed.
@@ -232,16 +227,7 @@ Priority: **M** = Must (v1), **S** = Should (v1 if affordable), **C** = Could (l
 - Selecting only one role (e.g. on-chain) generates only the role's directory (e.g., on-chain) plus base files.
 - `just *` succeeds with no other roles present.
 
-### US-7: Web visual builder
-
-*As a newcomer who prefers a UI, I want to configure my project visually and copy a command, so that I get the same result as the CLI without memorizing flags.*
-
-**Acceptance (FR-23):**
-- The web UI lists the same roles/tools as the CLI (same registry).
-- Invalid combinations are flagged live.
-- The user can preview the file tree and copy a `cardano-init …` command that, run locally, produces the project.
-
-### US-8: Extending with a new tool
+### US-7: Extending with a new tool
 
 *As a tool author, I want to add support for my tool by writing data and a template, so that it composes with every existing tool without combinatorial work.*
 

@@ -3,7 +3,6 @@ mod contract;
 mod doctor;
 mod registry;
 mod scaffold;
-mod web;
 
 fn main() {
     reset_sigpipe();

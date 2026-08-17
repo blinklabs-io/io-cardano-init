@@ -1,6 +1,6 @@
 //! The single source of truth for the CLI's human-facing look: the status
 //! glyphs, the color palette, and the layout constants. Every `print_*` in
-//! `cli/` and the `web` banner style through these helpers instead of spelling
+//! `cli/` styles through these helpers instead of spelling
 //! out `console::style(...).cyan().bold()` at the call site, so the vocabulary
 //! ("success is green ✔, a path is cyan, a heading is bold + underlined") is
 //! defined once and can't drift between commands.

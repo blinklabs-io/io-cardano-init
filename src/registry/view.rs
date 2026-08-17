@@ -1,8 +1,8 @@
 //! Serializable, presentation-agnostic views of the registry.
 //!
-//! These are the single source the `list` subcommand and the web builder both
-//! render from (ARCHITECTURE §7.3) — pure data derived from the registry, with
-//! no knowledge of colors, tables, or HTTP. The JSON shape matches TECH_SPEC §8.
+//! These are the single source the `list` subcommand renders from
+//! (ARCHITECTURE §7.3) — pure data derived from the registry, with no knowledge
+//! of colors or tables. The JSON shape matches TECH_SPEC §8.
 
 use serde::Serialize;
 
@@ -153,7 +153,7 @@ mod tests {
     fn tool_views_surface_experimental_flag() {
         let views = tool_views(&registry());
         // Experimental status is carried through to the discovery surface so
-        // `list` and the web builder can flag not-yet-build-green tools.
+        // `list` can flag not-yet-build-green tools.
         let blaster = views.iter().find(|t| t.id == "blaster").unwrap();
         assert!(blaster.experimental);
         let aiken = views.iter().find(|t| t.id == "aiken").unwrap();

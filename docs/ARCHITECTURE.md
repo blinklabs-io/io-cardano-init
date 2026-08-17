@@ -14,7 +14,7 @@ Five principles drive every structural decision in the codebase. When a tradeoff
 
 2. **Tools are data-driven; roles are a fixed code vocabulary.** Tools and templates are declarative data embedded at compile time: adding a *tool* is a data change (a TOML file + a template directory + a recompile), never a change to CLI logic. **Roles**, by contrast, are a small fixed vocabulary defined in code (the `Role` enum, §3.1): the registry *references* roles but cannot introduce them. The set is not frozen at a particular number (it can grow) but growing it is a deliberate, rare code change, not a data change.
 
-3. **Pure core, impure edges.** `registry/`, `scaffold/`, `contract`, and the pure part of `doctor/` are pure logic over data with **zero dependency on `cli/`**. All user interaction, terminal formatting, network, and system probing live at the edges (`cli/`, `web/`, the impure half of `doctor/`). This keeps the core testable and makes future extraction (e.g. WASM) straightforward.
+3. **Pure core, impure edges.** `registry/`, `scaffold/`, `contract`, and the pure part of `doctor/` are pure logic over data with **zero dependency on `cli/`**. All user interaction, terminal formatting, network, and system probing live at the edges (`cli/`, the impure half of `doctor/`). This keeps the core testable and makes future extraction straightforward.
 
 4. **Deterministic generation.** Identical inputs produce byte-identical output. This is a hard requirement for coding-agent trust, reproducibility, and snapshot tests. Determinism is guaranteed at the **planning** phase (§6.4).
 
@@ -37,13 +37,16 @@ cardano-init/
 │   │   ├── interactive.rs      # Guided interactive flow (dialoguer)
 │   │   ├── oneshot.rs          # Flag → Selection, validation, machine-readable errors
 │   │   ├── output.rs           # Presenter: renders results/errors as human text or JSON
-│   │   └── update.rs           # (planned) cached, pre-generation, fail-silent update check (§9)
+│   │   ├── theme.rs            # Terminal styling palette (console)
+│   │   ├── git.rs              # git helpers: clean-tree gate + init a new project's repo
+│   │   └── update.rs           # add/remove: mutate an existing scaffolded project (§6.4, TECH_SPEC §15)
 │   │
 │   ├── registry/               # Pure: tool + role definitions from embedded TOML
 │   │   ├── mod.rs
 │   │   ├── types.rs            # Role, ToolDef, RoleConfig, Selection, Network, Seam, …
 │   │   ├── loader.rs           # rust-embed → Registry (indexed by id and by role)
-│   │   └── compat.rs           # off-chain ↔ provider (devnet+infra) seam compatibility
+│   │   ├── compat.rs           # off-chain ↔ provider (devnet+infra) seam compatibility
+│   │   └── view.rs             # read-only projections of the registry (for `list`)
 │   │
 │   ├── scaffold/               # Pure: project generation pipeline
 │   │   ├── mod.rs              # Orchestrator (scaffold / dry_run) + embedded templates
@@ -52,19 +55,20 @@ cardano-init/
 │   │   ├── renderer.rs         # Phase 3: MiniJinja render / pass-through
 │   │   └── writer.rs           # Phase 4: the only phase with disk side effects
 │   │
-│   ├── doctor/                 # (planned) dependency detection + install advice (§8)
+│   ├── doctor/                 # Dependency detection + install advice (§8)
 │   │   ├── mod.rs              # Pure: (deps, environment) → missing + advice
-│   │   ├── catalog.rs          # Pure: dep id → per-platform check/install knowledge
+│   │   ├── catalog.rs          # Pure: loads registry/deps.toml → dep recipes
+│   │   ├── installers.rs       # Pure: closed Installer vocabulary + command templating
 │   │   └── probe.rs            # Impure: detect OS, package managers, PATH
-│   │
-│   ├── web/                    # Impure edge: local web builder server
-│   │   ├── mod.rs              # Hand-rolled HTTP server; /, /api/registry, /api/plan
-│   │   └── ui.html             # Embedded single-page UI
 │   │
 │   └── contract.rs             # Interface-contract constants (paths, env vars, dirs)
 │
-├── registry/tools/             # Embedded data: one TOML per tool
-│   ├── aiken.toml  meshjs.toml  scalus.toml  blaster.toml
+├── registry/tools/             # Embedded data: one TOML per tool (15 tools)
+│   ├── aiken.toml  plinth.toml  scalus.toml                       # on-chain
+│   ├── meshjs.toml  evolution.toml  tx3.toml                      # off-chain
+│   ├── cardano-node.toml  cardano-node-api.toml  dingo.toml       # infra
+│   ├── dolos.toml  kupo.toml  ogmios.toml  tx-submit-api.toml     # infra
+│   ├── yaci.toml  blaster.toml                                    # devnet / formal-methods
 │
 └── templates/                  # Embedded data: tool/role template trees
     ├── _base/    (Justfile.jinja, README.md.jinja, AGENTS.md.jinja, CLAUDE.md, gitignore, env.jinja)
@@ -76,20 +80,20 @@ Assets are embedded with **rust-embed** via `#[folder = "registry/"]` and `#[fol
 
 ### 2.2 Module dependency graph
 
-The graph flows strictly downward; there are no cycles. The key invariant: **`registry`, `scaffold`, `contract`, and the pure part of `doctor` never depend on `cli` or `web`.**
+The graph flows strictly downward; there are no cycles. The key invariant: **`registry`, `scaffold`, `contract`, and the pure part of `doctor` never depend on `cli`.**
 
 ```
 main.rs
   │
-  ├── cli/ ──────┬─▶ scaffold/ ─▶ registry/        web/ ─┬─▶ scaffold::planner
-  │              ├─▶ doctor/   ─▶ registry/              └─▶ registry/
-  │              ├─▶ registry/                           (web is an edge, like cli)
+  ├── cli/ ──────┬─▶ scaffold/ ─▶ registry/
+  │              ├─▶ doctor/   ─▶ registry/
+  │              ├─▶ registry/
   │              └─▶ contract
   │
   scaffold/, doctor/(pure), registry/  ──▶  contract
 ```
 
-`cli/` and `web/` are sibling **edges**: both orchestrate the pure core and present results. Neither is depended upon by the core.
+`cli/` is the **edge**: it orchestrates the pure core and presents results. It is not depended upon by the core.
 
 ---
 
@@ -106,7 +110,7 @@ pub enum Role { OnChain, OffChain, Infrastructure, Devnet, FormalMethods }
 - `Role::ALL` defines the **canonical order** used for deterministic output.
 - Each role maps to a kebab string (`on-chain`, `formal-methods`, …) for TOML/flags, a `Display` name for humans, and a contract directory (`dir()` → §4).
 - **The enum is the sole source of truth for the role vocabulary: roles are *not* defined by the repository data.** A tool's `[roles.<kebab>]` blocks merely *reference* existing roles; the registry cannot introduce a new one. Role strings are validated against the enum at load time via `Role::from_kebab` (an unknown role → `RegistryError::UnknownRole`). What the registry data determines is which *tools* exist and which of these fixed roles each can fill, not the set of roles itself.
-- Adding a role is therefore a deliberate code change touching every site that names roles: a new `Role` variant + `Role::ALL` + `from_kebab`/`as_kebab`/`dir()`/`Display`, a `contract::DIR_*` constant, `TemplateContext` handling, a CLI flag, and the web query params. Adding a *tool*, by contrast, is pure data. The role set is small and grows rarely.
+- Adding a role is therefore a deliberate code change touching every site that names roles: a new `Role` variant + `Role::ALL` + `from_kebab`/`as_kebab`/`dir()`/`Display`, a `contract::DIR_*` constant, `TemplateContext` handling, and a CLI flag. Adding a *tool*, by contrast, is pure data. The role set is small and grows rarely.
 - The **fullstack `protocol/`** component (§3.2) is a related but distinct kind of code change: it adds a `contract::DIR_PROTOCOL` constant and `TemplateContext` handling, but **no** `Role` variant — it is a *fused component* derived from two existing roles, not a sixth role. New fullstack *tools* remain pure data (a `[fullstack]` table + a template dir).
 
 ### 3.2 Tools
@@ -165,6 +169,10 @@ pub const DIR_INFRA = "infra"; DIR_DEVNET = "devnet"; DIR_FORMAL_METHODS = "form
 pub const DIR_PROTOCOL = "protocol";   // fused on-chain+off-chain component (fullstack, §3.2)
 pub const ENV_INDEXER_URL = "INDEXER_URL"; ENV_INDEXER_PORT = "INDEXER_PORT";
 pub const ENV_NODE_SOCKET_PATH = "NODE_SOCKET_PATH"; ENV_NETWORK = "CARDANO_NETWORK";
+// Provider-specific endpoints, seeded empty and populated when the matching
+// infrastructure provider is provisioned:
+pub const ENV_OGMIOS_URL = "OGMIOS_URL"; ENV_TX_SUBMIT_URL = "TX_SUBMIT_URL";
+pub const ENV_DOLOS_GRPC_URL = "DOLOS_GRPC_URL"; ENV_CARDANO_NODE_API_URL = "CARDANO_NODE_API_URL";
 ```
 
 `DIR_PROTOCOL` is the one directory not backed by a `Role` (§3.2): a fullstack tool's fused
@@ -270,7 +278,6 @@ Render processes each entry whose source is a `.jinja` template through MiniJinj
 
 - **One-shot** (`--name` + role flags): flags → `Selection` in `oneshot.rs`, non-interactive, deterministic. Primary path for agents and CI.
 - **Interactive** (no `--name`): guided `dialoguer` flow in `interactive.rs`.
-- **`web` subcommand**: launches the local builder server (§10).
 - **`list` subcommand**: capability discovery; lists roles/tools, human by default, `--format json` for agents (see §7.3).
 
 A safety check refuses to overwrite an existing target directory.
@@ -285,7 +292,7 @@ To serve both humans and agents without scattering format branches:
 ### 7.3 Machine-readable errors & discovery (PRD FR-13/FR-15)
 
 - **Errors** carry a **stable string code** (e.g. `unknown_tool`, `tool_role_mismatch`, `name_required`, `dir_exists`) plus context (offending input + valid alternatives) and map to **meaningful exit codes**. In `--format json`, errors serialize to a stable shape on stderr; the core never falls back to interactive prompting in non-interactive mode. `CliError::code()`/`context()` carry the code + serializable context (§2.5).
-- **Discovery** is the **`list` subcommand** (`cardano-init list`) that emits the registry (roles, tools, the roles each fills, languages). Human by default, **`--format json`** for agents (§8 schema). Both `list` and `web::build_registry_json` render from one shared model, `registry::view` (`role_views()` / `tool_views()`), so the JSON cannot drift; the human tool block reuses `cli::format_tool` (shared with `--help`).
+- **Discovery** is the **`list` subcommand** (`cardano-init list`) that emits the registry (roles, tools, the roles each fills, languages). Human by default, **`--format json`** for agents (§8 schema). `list` renders from the shared model `registry::view` (`role_views()` / `tool_views()`); the human tool block reuses `cli::format_tool` (shared with `--help`).
 
 ---
 
@@ -302,7 +309,7 @@ doctor/
 ```
 
 - **Two-tier inputs.** The selection yields **required** deps = `{just}` (universal task runner) ∪ the `system_deps` of all selected tools (unioned, deduped); and **recommended** deps (soft notes, never blocking). The two-tier mechanism stands, but there is **currently no recommended dep**: the former `process-compose`/≥2-infra case existed only to smooth a multi-service top-level `just dev`, which no longer exists (the top level no longer aggregates `dev`; long-running services start per-component — TECH_SPEC §7.2/§9.1). `just` is a base/derived dep owned by no tool.
-- **Installers vs deps: the key model.** An **installer** is just another dependency. Code owns a *closed* `Installer` vocabulary (`Brew`, `Apt`, `Dnf`, `Pacman`, `Winget`, `Nix`, `Go`, `Cargo`, `Npm`, `Aikup`, `CardanoUp`, `Curl`, `PowerShell`); each declares its detect-binaries, a command template (`brew install {arg}`, `npm install -g {arg}`, `curl -sSfL {arg} | sh`, …), and a **`bootstrap` list of dep ids**. An **empty `bootstrap` list ⇒ terminal** (we detect it, never install it: system package managers, `nix`, the OS shells); a **non-empty list ⇒ bootstrappable** by installing any one of those deps in order (`npm`→`["node"]`, `aikup`→`["aikup"]`, `cargo`→`["rustup","rust"]`). This is what makes the catalog a graph rather than a flat list.
+- **Installers vs deps: the key model.** An **installer** is just another dependency. Code owns a *closed* `Installer` vocabulary (`Brew`, `Apt`, `Dnf`, `Pacman`, `Winget`, `Nix`, `Go`, `Cargo`, `Npm`, `Aikup`, `CardanoUp`, `Tx3up`, `Curl`, `PowerShell`); each declares its detect-binaries, a command template (`brew install {arg}`, `npm install -g {arg}`, `curl -sSfL {arg} | sh`, …), and a **`bootstrap` list of dep ids**. An **empty `bootstrap` list ⇒ terminal** (we detect it, never install it: system package managers, `nix`, the OS shells); a **non-empty list ⇒ bootstrappable** by installing any one of those deps in order (`npm`→`["node"]`, `aikup`→`["aikup"]`, `cargo`→`["rustup","rust"]`). This is what makes the catalog a graph rather than a flat list.
 - **Recipes live in data.** Per-dep recipes are an embedded TOML file (`registry/deps.toml`), keyed by dep id: `binaries` (presence check), `docs` (universal fallback), and an ordered `install` list of `{ installer = arg }` methods. Installer names are validated against the code enum at load (unknown installer → load error, like an unknown `Role`). See §8.1 for why code/data split this way.
 - **Resolver (`resolve`, pure, recursive).** A dep is present if  any of its `binaries` is on `PATH`. For a missing dep, the walk is **two-pass over the ordered `install` methods**: Pass 1 returns the first method whose installer is **detected** (a one-step command); only if none is directly available does Pass 2 walk the methods again and, for the first **bootstrappable** installer, recurse to satisfy one of its `bootstrap` deps and prepend those steps. The result is an ordered, possibly multi-step **plan** (e.g. `aiken` missing with no `nix`/`aikup` → install `aikup` via `npm`, then `aikup install`). Two passes — rather than bootstrapping each method before trying later ones — are exactly why the `nix` path needs no `aikup` when `nix` is present (a single method is still chosen per dep). Cycle detection guards the walk; `docs` is the fallback when nothing resolves (advice never empty, FR-20). Version constraints are out of scope for v1 (presence only); doctor output is **host-dependent by design** (not part of the byte-identical generation contract). Full algorithm in TECH_SPEC §9.4.
 - **Infrastructure deps** install via `cardano-up` (the `CardanoUp` installer); `cardano-up` is itself a dep in `registry/deps.toml` (bootstrappable via its own installer methods). Auto-installing it arrives with the DX.05 install command; bootstrapping `cardano-up` when absent may follow post-RC (ROADMAP).
@@ -340,9 +347,9 @@ install  = [ { aikup = "" }, { nix = "aiken" } ]
 
 ---
 
-## 9. Version-update check (`cli/update.rs`, planned)
+## 9. Version-update check (planned, not yet implemented)
 
-The chosen mechanism for template freshness without runtime template fetching (PRD A-3/FR-24). It is a **thin `cli/` concern** (UX, network, never core):
+The chosen mechanism for template freshness without runtime template fetching (PRD A-3/FR-24). It is a **thin `cli/` concern** (UX, network, never core). No code implements it yet; the `cli/update.rs` module name is already taken by the `add`/`remove` project mutations (§6.4), so this check will land in its own module when built:
 
 - Best-effort check against the GitHub releases API; the notice (if any) is surfaced **before the write phase**, so the user can update and regenerate rather than discovering it post-write. It informs, never gates (the user may Ctrl-C to update first); it never alters generated output.
 - **Latency is hidden, not added.** In **interactive** mode the check fires async at startup and completes during tool selection: zero added latency. In **human one-shot** there's no think-time to hide it, so the result is joined with a **≤1s deadline** behind a spinner before writing (worst case +1s, once/day).
@@ -351,31 +358,7 @@ The chosen mechanism for template freshness without runtime template fetching (P
 
 ---
 
-## 10. Web UI architecture
-
-The CLI is the **single source of truth**; the web UI never generates a project: it configures, previews structure, and emits a copyable `cardano-init …` command.
-
-### 10.1 Local server (`web/`, exists)
-
-A hand-rolled, zero-dependency HTTP/1.1 server (`TcpListener` + threads) chosen to keep the "single static binary, zero runtime deps" goal. Routes:
-- `GET /` → embedded `ui.html`.
-- `GET /api/registry` → registry as JSON (prebuilt once).
-- `GET /api/plan?…` → runs the **actual Rust planner** and returns the file tree.
-
-Because `/api/plan` calls `scaffold::planner`, the local server's preview is guaranteed to match real generation: no duplicated logic.
-
-### 10.2 Hosted page
-
-A hosted page has no binary behind it. The key observation: the **command string** is trivial to assemble in JS (concatenate flags) and needs *no* planner. Only the live *file-tree preview* needs planner logic. So the resolution is staged:
-
-- **RC (DX.05): static builder.** Ship the registry as **static JSON** and assemble the `cardano-init …` command in plain JS. No binary, no planner, no drift on the command string. The planner-backed **live tree preview is dropped** for the RC (the command output is the deliverable). Hostable as a pure static site.
-- **Post-RC: WASM live-preview.** Compile the pure registry+planner to WASM so the hosted builder shows the exact file tree with zero logic duplication (realizes the "future extraction" goal). Deferred to Phase 2 (ROADMAP): adds a WASM build/bindings workstream not worth the RC-deadline risk.
-
-The local `serve` path (10.1) ships regardless and keeps its planner-backed preview. If a JS tree-preview approximation is ever added before WASM, it must be tested against the planner's output to bound drift.
-
----
-
-## 11. Testing strategy
+## 10. Testing strategy
 
 - **Unit (pure core):** registry loading (every TOML parses, fields present); context building; planning (exact file set + order); rendering (context + template → expected output); doctor `resolve` over synthetic environments (incl. multi-step bootstrap chains and the cycle guard).
 - **Contract compliance (mechanical):** for each template, assert the Justfile exposes `build`/`test`/`clean` (`dev` is optional); for on-chain, assert `just build` produces `blueprint/plutus.json`. This is what lets us avoid testing tool combinations.
@@ -386,18 +369,18 @@ The local `serve` path (10.1) ships regardless and keeps its planner-backed prev
 
 ---
 
-## 12. Extensibility: adding a tool
+## 11. Extensibility: adding a tool
 
 1. Add `registry/tools/<tool>.toml` with metadata, `system_deps`, `nix_packages`, and a `[roles.<role>]` block per supported role.
 2. Add `templates/<tool>/<role>/` with a `manifest.toml` and template files (conforming to the contract, §4).
 3. If the tool introduces a new `system_deps` id, add a `registry/deps.toml` entry (pure data; code is needed only if the dep requires a brand-new installer, §8).
-4. Add the per-tool tests (§11).
+4. Add the per-tool tests (§10).
 5. Recompile (assets are embedded at compile time).
 
 No CLI/core code changes are required for a new tool. Contract conformance guarantees it composes with every existing tool in other roles.
 
 ---
 
-## 13. Open architectural decisions
+## 12. Open architectural decisions
 
 *None currently open.* 
