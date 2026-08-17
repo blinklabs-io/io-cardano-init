@@ -178,10 +178,6 @@ pub struct InitArgs {
     #[arg(long, value_name = "TOOL_ID")]
     pub formal_methods: Option<String>,
 
-    /// Target network
-    #[arg(long, default_value = "preview")]
-    pub network: String,
-
     /// Generate Nix flake for dependency management
     #[arg(long)]
     pub nix: bool,
@@ -210,7 +206,6 @@ impl InitArgs {
             || self.formal_methods.is_some()
             || self.nix
             || self.dry_run
-            || self.network != "preview"
     }
 }
 
@@ -324,13 +319,6 @@ pub enum CliError {
     #[diagnostic(transparent)]
     IncompatibleTools(Box<IncompatibleToolsError>),
 
-    #[error("invalid network '{value}'")]
-    #[diagnostic(
-        code(cardano_init::invalid_network),
-        help("expected one of: preview, preprod, mainnet.")
-    )]
-    InvalidNetwork { value: String },
-
     #[error("invalid project name '{name}' — {reason}")]
     #[diagnostic(code(cardano_init::invalid_project_name))]
     InvalidProjectName { name: String, reason: String },
@@ -429,7 +417,6 @@ impl CliError {
             | CliError::FullstackUnsupported { .. }
             | CliError::FullstackConflict
             | CliError::IncompatibleTools(_)
-            | CliError::InvalidNetwork { .. }
             | CliError::InvalidProjectName { .. }
             | CliError::NameRequired
             | CliError::ProjectUnrecognized { .. }
@@ -463,7 +450,6 @@ impl CliError {
             CliError::FullstackUnsupported { .. } => "fullstack_unsupported",
             CliError::FullstackConflict => "fullstack_conflict",
             CliError::IncompatibleTools(_) => "incompatible_tools",
-            CliError::InvalidNetwork { .. } => "invalid_network",
             CliError::InvalidProjectName { .. } => "invalid_project_name",
             CliError::NameRequired => "name_required",
             CliError::ProjectUnrecognized { .. } => "project_unrecognized",
@@ -501,9 +487,6 @@ impl CliError {
                 tool_id,
                 valid_tools,
             } => json!({ "tool_id": tool_id, "valid_tools": valid_tools }),
-            CliError::InvalidNetwork { value } => {
-                json!({ "value": value, "expected": ["preview", "preprod", "mainnet"] })
-            }
             CliError::InvalidProjectName { name, reason } => {
                 json!({ "name": name, "reason": reason })
             }
@@ -839,7 +822,6 @@ fn run_init(args: InitArgs, registry: &Registry, format: Format) -> Result<(), C
             &args.infra,
             args.devnet.as_deref(),
             args.formal_methods.as_deref(),
-            &args.network,
             args.nix,
             registry,
         )?;
@@ -942,7 +924,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry,
         )
@@ -974,7 +955,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry,
         )
@@ -982,29 +962,6 @@ mod tests {
         assert_eq!(err.code(), "tool_role_mismatch");
         let ctx = err.context();
         assert_eq!(ctx["valid_roles"], serde_json::json!(["on-chain"]));
-    }
-
-    #[test]
-    fn invalid_network_context_lists_expected() {
-        let registry = Registry::load().unwrap();
-        let err = oneshot::build_selection(
-            "demo",
-            Some("aiken"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-            "badnet",
-            false,
-            &registry,
-        )
-        .unwrap_err();
-        assert_eq!(err.code(), "invalid_network");
-        assert_eq!(
-            err.context()["expected"],
-            serde_json::json!(["preview", "preprod", "mainnet"])
-        );
     }
 
     #[test]
@@ -1020,7 +977,6 @@ mod tests {
             infra: vec![],
             devnet: None,
             formal_methods: None,
-            network: "preview".to_string(),
             nix: false,
             allow_experimental: false,
             dry_run: true,
@@ -1041,7 +997,6 @@ mod tests {
             infra: vec![],
             devnet: None,
             formal_methods: formal_methods.map(str::to_string),
-            network: "preview".to_string(),
             nix: false,
             allow_experimental,
             dry_run: true,
@@ -1120,7 +1075,6 @@ mod tests {
             infra: vec![],
             devnet: Some(devnet.to_string()),
             formal_methods: None,
-            network: "preview".to_string(),
             nix: false,
             allow_experimental: true,
             dry_run: true,

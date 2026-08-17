@@ -171,7 +171,7 @@
     }
   }
 
-  /* -- Option sections (network, nix, roles) -- */
+  /* -- Option sections (nix, roles) -- */
   .option-section {
     margin-bottom: 1.25rem;
   }
@@ -395,17 +395,6 @@
     <div id="roles"></div>
 
     <div class="option-section">
-      <div class="option-header">Network</div>
-      <div class="option-row">
-        <select id="network">
-          <option value="preview" selected>preview</option>
-          <option value="preprod">preprod</option>
-          <option value="mainnet">mainnet</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="option-section">
       <div class="option-header">Options</div>
       <div class="option-row">
         <div class="nix-toggle">
@@ -562,7 +551,6 @@
     const el = document.getElementById('command');
     const btn = document.getElementById('copy-btn');
     const name = document.getElementById('project-name').value.trim() || 'my-protocol';
-    const network = document.getElementById('network').value;
     const nix = document.getElementById('nix').checked;
 
     if (!hasSelection()) {
@@ -579,7 +567,6 @@
     for (const infra of selection['infrastructure']) parts.push('--infra', infra);
     if (selection['devnet']) parts.push('--devnet', selection['devnet']);
     if (selection['formal-methods']) parts.push('--formal-methods', selection['formal-methods']);
-    if (network !== 'preview') parts.push('--network', network);
     if (nix) parts.push('--nix');
     // Selecting an experimental tool requires an explicit opt-in on the CLI, so
     // the emitted command includes the flag — otherwise the paste would error.
@@ -616,7 +603,6 @@
     if (selection['devnet']) params.set('devnet', selection['devnet']);
     if (selection['formal-methods']) params.set('formal_methods', selection['formal-methods']);
     params.set('nix', document.getElementById('nix').checked ? 'true' : 'false');
-    params.set('network', document.getElementById('network').value);
 
     planAbort = new AbortController();
 
@@ -686,10 +672,6 @@
   }
 
   document.getElementById('project-name').addEventListener('input', () => {
-    updateCommand();
-    updatePlan();
-  });
-  document.getElementById('network').addEventListener('change', () => {
     updateCommand();
     updatePlan();
   });

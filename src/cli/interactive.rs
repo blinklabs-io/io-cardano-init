@@ -43,15 +43,15 @@ pub fn run_interactive(
 
     // Step 3: Options
     let project_name = prompt_project_name(&theme)?;
-    let network = prompt_network(&theme)?;
     let nix = Confirm::with_theme(&theme)
         .with_prompt("Set up Nix for dependency management?")
         .default(false)
         .interact()?;
+    // Always preview; switch networks by editing CARDANO_NETWORK in the generated .env.
     let selection = Selection {
         project_name,
         assignments,
-        network,
+        network: Network::Preview,
         nix,
     };
 
@@ -262,14 +262,4 @@ fn prompt_project_name(theme: &ColorfulTheme) -> Result<String, CliError> {
         })
         .interact_text()?;
     Ok(name)
-}
-
-fn prompt_network(theme: &ColorfulTheme) -> Result<Network, CliError> {
-    let items = ["preview", "preprod", "mainnet"];
-    let idx = Select::with_theme(theme)
-        .with_prompt("Target network")
-        .items(&items)
-        .default(0)
-        .interact()?;
-    Ok(Network::from_str(items[idx]).expect("hardcoded network values are valid"))
 }

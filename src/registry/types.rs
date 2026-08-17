@@ -286,23 +286,15 @@ pub struct RoleAssignment {
     pub tool_id: String,
 }
 
-/// Target Cardano network.
+/// Target Cardano network. The scaffolder always emits [`Network::Preview`];
+/// `Preprod`/`Mainnet` are the other valid `CARDANO_NETWORK` values a generated
+/// `.env` can be switched to at runtime (hence never constructed here).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Network {
     Preview,
     Preprod,
     Mainnet,
-}
-
-impl Network {
-    pub fn from_str(s: &str) -> Result<Self, UnknownNetworkError> {
-        match s {
-            "preview" => Ok(Network::Preview),
-            "preprod" => Ok(Network::Preprod),
-            "mainnet" => Ok(Network::Mainnet),
-            _ => Err(UnknownNetworkError(s.to_string())),
-        }
-    }
 }
 
 impl fmt::Display for Network {
@@ -314,21 +306,6 @@ impl fmt::Display for Network {
         }
     }
 }
-
-#[derive(Debug, Clone)]
-pub struct UnknownNetworkError(pub String);
-
-impl fmt::Display for UnknownNetworkError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "unknown network: '{}' (expected preview, preprod, or mainnet)",
-            self.0
-        )
-    }
-}
-
-impl std::error::Error for UnknownNetworkError {}
 
 /// The complete, fully resolved user selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,21 +379,11 @@ mod tests {
     }
 
     #[test]
-    fn network_display_and_parse() {
-        for (s, expected) in [
-            ("preview", Network::Preview),
-            ("preprod", Network::Preprod),
-            ("mainnet", Network::Mainnet),
-        ] {
-            let parsed = Network::from_str(s).unwrap();
-            assert_eq!(parsed, expected);
-            assert_eq!(parsed.to_string(), s);
-        }
-    }
-
-    #[test]
-    fn network_parse_invalid() {
-        assert!(Network::from_str("testnet").is_err());
-        assert!(Network::from_str("").is_err());
+    fn network_display_matches_env_vocabulary() {
+        // These strings are the valid `CARDANO_NETWORK` values in a generated
+        // `.env`; Display must render them exactly (templates match on them).
+        assert_eq!(Network::Preview.to_string(), "preview");
+        assert_eq!(Network::Preprod.to_string(), "preprod");
+        assert_eq!(Network::Mainnet.to_string(), "mainnet");
     }
 }

@@ -16,7 +16,6 @@ pub fn build_selection(
     infra: &[String],
     devnet: Option<&str>,
     formal_methods: Option<&str>,
-    network: &str,
     nix: bool,
     registry: &Registry,
 ) -> Result<Selection, CliError> {
@@ -91,14 +90,11 @@ pub fn build_selection(
         return Err(CliError::NoRolesSelected);
     }
 
-    let network = Network::from_str(network).map_err(|_| CliError::InvalidNetwork {
-        value: network.to_string(),
-    })?;
-
+    // Always preview; switch networks by editing CARDANO_NETWORK in the generated .env.
     Ok(Selection {
         project_name: name.to_string(),
         assignments,
-        network,
+        network: Network::Preview,
         nix,
     })
 }
@@ -208,7 +204,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         )
@@ -230,7 +225,6 @@ mod tests {
             &[],
             Some("yaci"),
             None,
-            "preprod",
             true,
             &registry(),
         )
@@ -238,7 +232,8 @@ mod tests {
 
         assert_eq!(sel.assignments.len(), 3);
         assert!(sel.nix);
-        assert_eq!(sel.network.to_string(), "preprod");
+        // Network is fixed at scaffold time; switching is a `.env` edit.
+        assert_eq!(sel.network.to_string(), "preview");
     }
 
     #[test]
@@ -251,7 +246,6 @@ mod tests {
             &[],
             None,
             Some("blaster"),
-            "preview",
             false,
             &registry(),
         )
@@ -272,7 +266,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
@@ -290,7 +283,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
@@ -307,7 +299,6 @@ mod tests {
             &["kupo".to_string(), "kupo".to_string()],
             None,
             None,
-            "preview",
             false,
             &registry(),
         )
@@ -332,7 +323,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         )
@@ -357,7 +347,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
@@ -383,28 +372,10 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
         assert!(matches!(result, Err(CliError::NoRolesSelected)));
-    }
-
-    #[test]
-    fn invalid_network_errors() {
-        let result = build_selection(
-            "test",
-            Some("aiken"),
-            None,
-            None,
-            &[],
-            None,
-            None,
-            "badnet",
-            false,
-            &registry(),
-        );
-        assert!(matches!(result, Err(CliError::InvalidNetwork { .. })));
     }
 
     #[test]
@@ -417,7 +388,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
@@ -434,7 +404,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
@@ -451,7 +420,6 @@ mod tests {
             &[],
             None,
             None,
-            "preview",
             false,
             &registry(),
         );
