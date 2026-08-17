@@ -134,7 +134,7 @@ pub fn validate_project_name(name: &str) -> Result<(), CliError> {
 /// template. On failure lists the fullstack-capable tools so the user can pick a
 /// valid one. A tool with a `[fullstack]` template is guaranteed (at registry
 /// load) to fill both on-chain and off-chain, so this is the only check needed.
-fn validate_fullstack_tool(tool_id: &str, registry: &Registry) -> Result<(), CliError> {
+pub(crate) fn validate_fullstack_tool(tool_id: &str, registry: &Registry) -> Result<(), CliError> {
     let is_fullstack = registry.get(tool_id).is_some_and(|t| t.fullstack.is_some());
     if is_fullstack {
         return Ok(());
@@ -152,7 +152,11 @@ fn validate_fullstack_tool(tool_id: &str, registry: &Registry) -> Result<(), Cli
     })
 }
 
-fn validate_tool_for_role(tool_id: &str, role: Role, registry: &Registry) -> Result<(), CliError> {
+pub(crate) fn validate_tool_for_role(
+    tool_id: &str,
+    role: Role,
+    registry: &Registry,
+) -> Result<(), CliError> {
     let tool = registry.get(tool_id).ok_or_else(|| {
         let mut valid_tools: Vec<String> = registry
             .tools_for_role(role)

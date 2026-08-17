@@ -188,8 +188,7 @@ pub struct RoleConfig {
 /// A single `cardano-up context env` output → contract `.env` key mapping,
 /// declared by an infrastructure tool (`[[infra.env]]`). `from` is the
 /// `cardano-up` output var name (e.g. `KUPO_URL`); `to` is the `.env` key the
-/// generated infra component writes (e.g. `INDEXER_URL`). See the
-/// infra-via-cardano-up proposal §5.1.
+/// generated infra component writes (e.g. `INDEXER_URL`). See TECH_SPEC §3.2.
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvMapping {
     pub from: String,
@@ -281,7 +280,7 @@ pub struct ToolDef {
 // ---------------------------------------------------------------------------
 
 /// One tool assigned to one role.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleAssignment {
     pub role: Role,
     pub tool_id: String,
@@ -332,7 +331,7 @@ impl fmt::Display for UnknownNetworkError {
 impl std::error::Error for UnknownNetworkError {}
 
 /// The complete, fully resolved user selection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
     pub project_name: String,
     pub assignments: Vec<RoleAssignment>,

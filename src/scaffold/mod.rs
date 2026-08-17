@@ -1,6 +1,7 @@
 pub mod context;
 pub mod planner;
 pub mod renderer;
+pub mod update;
 pub mod writer;
 
 use std::path::Path;

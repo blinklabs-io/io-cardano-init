@@ -8,6 +8,7 @@ use crate::doctor::probe::{Environment, ScanResult};
 use crate::registry::loader::Registry;
 use crate::registry::types::{Role, Selection, ToolDef};
 use crate::scaffold::planner::FilePlan;
+use crate::scaffold::update::{self, SlotOp, UpdatePlan};
 
 // ---------------------------------------------------------------------------
 // JSON envelope (TECH_SPEC §2.4)
@@ -573,7 +574,13 @@ fn print_tree(paths: &[Vec<&str>], depth: usize, _start: usize, indent: &mut Str
 /// Print success after scaffolding, including the dependency check-and-advise
 /// (TECH_SPEC §9). In `json`, emits one envelope carrying the selection plus the
 /// dependency report.
-pub fn print_success(selection: &Selection, registry: &Registry, report: &Report, format: Format) {
+pub fn print_success(
+    selection: &Selection,
+    registry: &Registry,
+    report: &Report,
+    git: crate::cli::git::InitOutcome,
+    format: Format,
+) {
     if format == Format::Json {
         emit_json_ok(json!({
             "project": selection.project_name,
@@ -581,6 +588,7 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
             "nix": selection.nix,
             "generated": true,
             "components": components_json(selection, registry),
+            "git": git.as_str(),
             "dependencies": report,
         }));
         return;
@@ -599,6 +607,8 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
     // Reiterate the experimental caveat after generation (a one-shot user may
     // not have seen the pre-generation summary warning scroll past).
     print_experimental_warning(selection, registry);
+
+    print_git_note(git);
 
     // Check-and-advise: surface any missing required deps before "Next steps".
     print_dep_advice(report);
@@ -622,6 +632,241 @@ pub fn print_success(selection: &Selection, registry: &Registry, report: &Report
         theme::command("just build")
     );
     println!();
+}
+
+// ---------------------------------------------------------------------------
+// Update (add / remove) presenters
+// ---------------------------------------------------------------------------
+
+/// Bucket an [`UpdatePlan`]'s slot ops into (create, replace, rerender, remove)
+/// directory lists, plus the shared removals, as owned strings.
+fn update_change_buckets(
+    plan: &UpdatePlan,
+) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let (mut create, mut replace, mut rerender, mut remove) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for op in &plan.slot_ops {
+        let dir = op.dir().to_string_lossy().into_owned();
+        match op {
+            SlotOp::Create(_) => create.push(dir),
+            SlotOp::Replace(_) => replace.push(dir),
+            SlotOp::RerenderInfra(_) => rerender.push(dir),
+            SlotOp::Remove(_) => remove.push(dir),
+        }
+    }
+    (create, replace, rerender, remove)
+}
+
+fn changes_json(plan: &UpdatePlan) -> serde_json::Value {
+    let (create, replace, rerender, remove) = update_change_buckets(plan);
+    let shared_removed: Vec<String> = plan
+        .shared_removals
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    json!({
+        "create": create,
+        "replace": replace,
+        "rerender": rerender,
+        "remove": remove,
+        "shared_removed": shared_removed,
+    })
+}
+
+/// Map a slot's tool ids to their display names (falling back to the id when a
+/// tool isn't in the registry), so the change panel names the tool, not just the
+/// directory.
+fn tool_names(ids: &[String], registry: &Registry) -> Vec<String> {
+    ids.iter()
+        .map(|id| {
+            registry
+                .get(id)
+                .map_or_else(|| id.clone(), |t| t.name.clone())
+        })
+        .collect()
+}
+
+/// Describe an infra re-render as the provider-set delta (`+Ogmios`, `-Kupo`),
+/// so a mixed add/remove of providers reads at a glance.
+fn infra_detail(from: &[String], to: &[String]) -> String {
+    let mut parts = Vec::new();
+    for t in to.iter().filter(|t| !from.contains(t)) {
+        parts.push(format!("+{t}"));
+    }
+    for f in from.iter().filter(|f| !to.contains(f)) {
+        parts.push(format!("-{f}"));
+    }
+    parts.join(", ")
+}
+
+/// The styled `+ dir/ add <tool>` rows for the change panel, naming the tool that
+/// changed in each slot. `applied` swaps "would X" (preview) for "X" (result).
+fn update_change_rows(
+    old: &Selection,
+    new: &Selection,
+    plan: &UpdatePlan,
+    registry: &Registry,
+    applied: bool,
+) -> Vec<String> {
+    let old_tools = update::slot_tools(old, registry);
+    let new_tools = update::slot_tools(new, registry);
+    let verb = |s: &str| {
+        if applied {
+            s.to_string()
+        } else {
+            format!("would {s}")
+        }
+    };
+    let names = |map: &std::collections::BTreeMap<String, Vec<String>>, dir: &str| {
+        map.get(dir)
+            .map(|ids| tool_names(ids, registry))
+            .unwrap_or_default()
+    };
+
+    let mut rows = Vec::new();
+    for op in &plan.slot_ops {
+        let dir = op.dir().to_string_lossy().into_owned();
+        let from = names(&old_tools, &dir);
+        let to = names(&new_tools, &dir);
+        let (mark, detail) = match op {
+            SlotOp::Create(_) => (
+                theme::good("+"),
+                format!("{} {}", verb("add"), to.join(", ")),
+            ),
+            SlotOp::Replace(_) => (
+                theme::warn("~"),
+                format!(
+                    "{} {} → {}",
+                    verb("replace"),
+                    from.join(", "),
+                    to.join(", ")
+                ),
+            ),
+            SlotOp::RerenderInfra(_) => (
+                theme::warn("~"),
+                format!("{} {}", verb("update"), infra_detail(&from, &to)),
+            ),
+            SlotOp::Remove(_) => (
+                theme::warn_strong("-"),
+                format!("{} {}", verb("remove"), from.join(", ")),
+            ),
+        };
+        rows.push(format!("{}  {}/  {}", mark, dir, theme::dim(detail)));
+    }
+    for f in &plan.shared_removals {
+        rows.push(format!(
+            "{}  {}  {}",
+            theme::warn_strong("-"),
+            f.to_string_lossy(),
+            theme::dim(verb("remove"))
+        ));
+    }
+    if rows.is_empty() {
+        rows.push(theme::dim("no component changes").to_string());
+    }
+    rows.push(theme::dim("· top-level files re-wired to match").to_string());
+    rows
+}
+
+/// Preview an update (`--dry-run`, or the confirm on a forced dirty tree): the
+/// change set, nothing written.
+pub fn print_update_plan(
+    old: &Selection,
+    new: &Selection,
+    plan: &UpdatePlan,
+    registry: &Registry,
+    format: Format,
+) {
+    if format == Format::Json {
+        emit_json_ok(json!({
+            "project": new.project_name,
+            "applied": false,
+            "dry_run": true,
+            "changes": changes_json(plan),
+        }));
+        return;
+    }
+
+    println!();
+    print_panel(
+        &new.project_name,
+        Some(theme::badge_warn("PLAN")),
+        &update_change_rows(old, new, plan, registry, false),
+    );
+    println!();
+    println!(
+        "  {}",
+        theme::dim("Re-run without --dry-run to apply; review the result with `git diff`.")
+    );
+    println!();
+}
+
+/// Report a completed update, with the dependency check-and-advise for the new
+/// selection (a newly-added tool may pull in new deps).
+pub fn print_update_success(
+    old: &Selection,
+    selection: &Selection,
+    registry: &Registry,
+    plan: &UpdatePlan,
+    report: &Report,
+    format: Format,
+) {
+    if format == Format::Json {
+        emit_json_ok(json!({
+            "project": selection.project_name,
+            "applied": true,
+            "network": selection.network.to_string(),
+            "nix": selection.nix,
+            "components": components_json(selection, registry),
+            "changes": changes_json(plan),
+            "dependencies": report,
+        }));
+        return;
+    }
+
+    println!();
+    print_panel(
+        &selection.project_name,
+        Some(theme::badge_ok("UPDATED")),
+        &update_change_rows(old, selection, plan, registry, true),
+    );
+    print_experimental_warning(selection, registry);
+    print_dep_advice(report);
+    println!();
+    print_rule("Next steps");
+    println!(
+        "    {} {}",
+        theme::accent("→"),
+        theme::dim("review the change with `git diff`")
+    );
+    println!(
+        "    {} {}",
+        theme::accent("→"),
+        theme::command("just build")
+    );
+    println!();
+}
+
+/// Note the git repo status after generation (human output). Silent when the
+/// project was created inside an existing repository.
+fn print_git_note(git: crate::cli::git::InitOutcome) {
+    use crate::cli::git::InitOutcome;
+    println!();
+    match git {
+        InitOutcome::Committed => println!(
+            "  {}  git repository initialized with an initial commit",
+            theme::badge_ok("GIT")
+        ),
+        InitOutcome::InitializedNoCommit => println!(
+            "  {}  git repository initialized — set git user.name/user.email, then commit",
+            theme::badge_warn("GIT")
+        ),
+        InitOutcome::GitMissing => println!(
+            "  {}",
+            theme::dim("git not found — skipped repo setup (add/remove want a clean git tree)")
+        ),
+        InitOutcome::AlreadyRepo => {} // inside an existing repo — leave it alone
+    }
 }
 
 /// Print the dependency advice block (missing required deps + install plans).

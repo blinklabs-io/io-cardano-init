@@ -299,7 +299,7 @@ env = [{ from = "DOLOS_SOCKET_PATH", to = "NODE_SOCKET_PATH" }]
 If a mapping targets a contract `.env` key that isn't seeded yet (a brand-new
 connection var), promote it: add a `contract::ENV_*` constant and a seeded
 `KEY=` line in `templates/_base/env.jinja` so every project always carries it.
-See `docs/proposals/infra-via-cardano-up.md` for the full model.
+See TECH_SPEC §3.2 (infra config) and §9.6 (infra detection) for the full model.
 
 **Devnet tools** provision a local throwaway chain. They should read both the blueprint and the `.env` if they are present, but must work if neither exists, and write the connection vars above during `dev` — that is how off-chain components reach the devnet, and it composes with any off-chain tool without per-pair code. Declare the seam(s) the devnet exposes with `serves` in `[compat]` (see [Declaring provider compatibility](#declaring-provider-compatibility-compat)) so the CLI can steer users away from an off-chain tool it can't serve.
 

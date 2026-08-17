@@ -33,7 +33,7 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 **The tool: all five roles present, four building green, formal-methods experimental:**
 - [ ] **On-chain:** Aiken; make the template genuinely `build`+`test` green (blueprint at canonical path).
 - [ ] **Off-chain:** MeshJS + Tx3; both generate and build.
-- [x] **Infrastructure:** filled via `cardano-up` — **Kupo, Ogmios, Dolos, Tx Submit API, Cardano Node, Cardano Node API, and Dingo** ship as selectable providers that aggregate into a single `infra/` component (one cardano-up context per project). Adding further providers is pure data (a registry TOML, no template). Uses `cardano-up`'s released `--context` flag (blinklabs-io#294; see `docs/proposals/infra-via-cardano-up.md`). Yaci DevKit remains in the **devnet** role (it is a dev/test kit, never deployed).
+- [x] **Infrastructure:** filled via `cardano-up` — **Kupo, Ogmios, Dolos, Tx Submit API, Cardano Node, Cardano Node API, and Dingo** ship as selectable providers that aggregate into a single `infra/` component (one cardano-up context per project). Adding further providers is pure data (a registry TOML, no template). Uses `cardano-up`'s released `--context` flag (blinklabs-io#294). Yaci DevKit remains in the **devnet** role (it is a dev/test kit, never deployed).
 - [ ] **Devnet:** Yaci DevKit (local devnet — its `dev` starts a Blockfrost-compatible devnet and writes the standard `.env` connection vars, so off-chain connects to it automatically; `test` runs an integration smoke test).
 - [x] **Formal-methods:** experimental; visible in the registry/UI as "experimental"; Blaster is a WIP upstream tool *and* its integration isn't build-green yet (made real at DX.05). Registry `experimental` flag (per-tool, §3.2.1 — covers unstable-upstream and/or not-build-green) surfaced across `list`/`--help`, interactive, one-shot, and the web builder, and **gated** behind `--allow-experimental` / an interactive confirm so it can't be scaffolded unknowingly; `list`/component JSON carry it for agents.
 
@@ -77,6 +77,9 @@ Deliverables below are tracked as checklists (`[ ]` = not yet done).
 
 **Dependency install command (nice-to-have, attempted):**
 - [ ] `cardano-init` dependency **install** (auto-install): runs the doctor's resolved plan with consent, across the installer graph (incl. bootstrapping `aikup`/`cardano-up`, etc.). Officially nice-to-have; **first thing cut** if it threatens the RC date.
+
+**Editing an existing project (#26):**
+- [x] `cardano-init add`/`remove`: reconstruct the current selection by detection, diff at the component-directory level, re-wire the shared files, write under a git-clean safety net. Never rewrites user code in a kept component. Reuses the init compat/experimental gates. New projects are git-initialized with an initial commit so the safety net works immediately. See TECH_SPEC §16 (PRD FR-25).
 
 **Engineering hardening:**
 - [ ] **CI/CD pipeline** improvements: per-tool build smoke tests (toolchains or Nix), snapshot/determinism gates, contract-compliance gates, release artifacts.

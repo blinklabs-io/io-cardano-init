@@ -11,7 +11,7 @@ use crate::registry::types::{EnvMapping, Role, Selection};
 /// `cardano-up context env` whenever a node-backed package (kupo/ogmios/…) is
 /// installed, so it is the default source for the contract's `NODE_SOCKET_PATH`.
 /// A provider that supplies its own node socket (e.g. dolos) overrides this via
-/// its own `[infra].env` mapping (infra-via-cardano-up proposal §5.4).
+/// its own `[infra].env` mapping (TECH_SPEC §3.2).
 const CARDANO_UP_NODE_SOCKET_VAR: &str = "CARDANO_NODE_SOCKET_PATH";
 
 // ---------------------------------------------------------------------------
