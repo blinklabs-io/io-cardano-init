@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::str::FromStr;
 
 use serde::Serialize;
 

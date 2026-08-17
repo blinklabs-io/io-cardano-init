@@ -307,6 +307,19 @@ impl fmt::Display for Network {
     }
 }
 
+impl std::str::FromStr for Network {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "preview" => Ok(Network::Preview),
+            "preprod" => Ok(Network::Preprod),
+            "mainnet" => Ok(Network::Mainnet),
+            _ => Err(()),
+        }
+    }
+}
+
 /// The complete, fully resolved user selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
