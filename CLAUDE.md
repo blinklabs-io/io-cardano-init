@@ -73,4 +73,8 @@ The **interface contract** (`contract.rs`) is what enables any on-chain tool to 
 - `rust-embed`: embed registry + templates into the binary
 - `thiserror`: error types
 - `console`: terminal styling
+- `indicatif`: progress spinners/bars
+- `comfy-table`: aligned tables (`list`, doctor output)
+- `miette`: `Diagnostic` derive (attaches `code`/`help` to errors for the presenter)
+- `libc` (Unix-only): reset SIGPIPE so piping into `head`/`less` exits cleanly
 - `tempfile` (dev): test scaffolding

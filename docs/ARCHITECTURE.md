@@ -37,13 +37,16 @@ cardano-init/
 │   │   ├── interactive.rs      # Guided interactive flow (dialoguer)
 │   │   ├── oneshot.rs          # Flag → Selection, validation, machine-readable errors
 │   │   ├── output.rs           # Presenter: renders results/errors as human text or JSON
-│   │   └── update.rs           # (planned) cached, pre-generation, fail-silent update check (§9)
+│   │   ├── theme.rs            # Terminal styling palette (console)
+│   │   ├── git.rs              # git helpers: clean-tree gate + init a new project's repo
+│   │   └── update.rs           # add/remove: mutate an existing scaffolded project (§6.4, TECH_SPEC §16)
 │   │
 │   ├── registry/               # Pure: tool + role definitions from embedded TOML
 │   │   ├── mod.rs
 │   │   ├── types.rs            # Role, ToolDef, RoleConfig, Selection, Network, Seam, …
 │   │   ├── loader.rs           # rust-embed → Registry (indexed by id and by role)
-│   │   └── compat.rs           # off-chain ↔ provider (devnet+infra) seam compatibility
+│   │   ├── compat.rs           # off-chain ↔ provider (devnet+infra) seam compatibility
+│   │   └── view.rs             # read-only projections of the registry (for `list`/web)
 │   │
 │   ├── scaffold/               # Pure: project generation pipeline
 │   │   ├── mod.rs              # Orchestrator (scaffold / dry_run) + embedded templates
@@ -52,9 +55,10 @@ cardano-init/
 │   │   ├── renderer.rs         # Phase 3: MiniJinja render / pass-through
 │   │   └── writer.rs           # Phase 4: the only phase with disk side effects
 │   │
-│   ├── doctor/                 # (planned) dependency detection + install advice (§8)
+│   ├── doctor/                 # Dependency detection + install advice (§8)
 │   │   ├── mod.rs              # Pure: (deps, environment) → missing + advice
-│   │   ├── catalog.rs          # Pure: dep id → per-platform check/install knowledge
+│   │   ├── catalog.rs          # Pure: loads registry/deps.toml → dep recipes
+│   │   ├── installers.rs       # Pure: closed Installer vocabulary + command templating
 │   │   └── probe.rs            # Impure: detect OS, package managers, PATH
 │   │
 │   ├── web/                    # Impure edge: local web builder server
@@ -63,8 +67,12 @@ cardano-init/
 │   │
 │   └── contract.rs             # Interface-contract constants (paths, env vars, dirs)
 │
-├── registry/tools/             # Embedded data: one TOML per tool
-│   ├── aiken.toml  meshjs.toml  scalus.toml  blaster.toml
+├── registry/tools/             # Embedded data: one TOML per tool (15 tools)
+│   ├── aiken.toml  plinth.toml  scalus.toml                       # on-chain
+│   ├── meshjs.toml  evolution.toml  tx3.toml                      # off-chain
+│   ├── cardano-node.toml  cardano-node-api.toml  dingo.toml       # infra
+│   ├── dolos.toml  kupo.toml  ogmios.toml  tx-submit-api.toml     # infra
+│   ├── yaci.toml  blaster.toml                                    # devnet / formal-methods
 │
 └── templates/                  # Embedded data: tool/role template trees
     ├── _base/    (Justfile.jinja, README.md.jinja, AGENTS.md.jinja, CLAUDE.md, gitignore, env.jinja)
@@ -165,6 +173,10 @@ pub const DIR_INFRA = "infra"; DIR_DEVNET = "devnet"; DIR_FORMAL_METHODS = "form
 pub const DIR_PROTOCOL = "protocol";   // fused on-chain+off-chain component (fullstack, §3.2)
 pub const ENV_INDEXER_URL = "INDEXER_URL"; ENV_INDEXER_PORT = "INDEXER_PORT";
 pub const ENV_NODE_SOCKET_PATH = "NODE_SOCKET_PATH"; ENV_NETWORK = "CARDANO_NETWORK";
+// Provider-specific endpoints, seeded empty and populated when the matching
+// infrastructure provider is provisioned:
+pub const ENV_OGMIOS_URL = "OGMIOS_URL"; ENV_TX_SUBMIT_URL = "TX_SUBMIT_URL";
+pub const ENV_DOLOS_GRPC_URL = "DOLOS_GRPC_URL"; ENV_CARDANO_NODE_API_URL = "CARDANO_NODE_API_URL";
 ```
 
 `DIR_PROTOCOL` is the one directory not backed by a `Role` (§3.2): a fullstack tool's fused
@@ -302,7 +314,7 @@ doctor/
 ```
 
 - **Two-tier inputs.** The selection yields **required** deps = `{just}` (universal task runner) ∪ the `system_deps` of all selected tools (unioned, deduped); and **recommended** deps (soft notes, never blocking). The two-tier mechanism stands, but there is **currently no recommended dep**: the former `process-compose`/≥2-infra case existed only to smooth a multi-service top-level `just dev`, which no longer exists (the top level no longer aggregates `dev`; long-running services start per-component — TECH_SPEC §7.2/§9.1). `just` is a base/derived dep owned by no tool.
-- **Installers vs deps: the key model.** An **installer** is just another dependency. Code owns a *closed* `Installer` vocabulary (`Brew`, `Apt`, `Dnf`, `Pacman`, `Winget`, `Nix`, `Go`, `Cargo`, `Npm`, `Aikup`, `CardanoUp`, `Curl`, `PowerShell`); each declares its detect-binaries, a command template (`brew install {arg}`, `npm install -g {arg}`, `curl -sSfL {arg} | sh`, …), and a **`bootstrap` list of dep ids**. An **empty `bootstrap` list ⇒ terminal** (we detect it, never install it: system package managers, `nix`, the OS shells); a **non-empty list ⇒ bootstrappable** by installing any one of those deps in order (`npm`→`["node"]`, `aikup`→`["aikup"]`, `cargo`→`["rustup","rust"]`). This is what makes the catalog a graph rather than a flat list.
+- **Installers vs deps: the key model.** An **installer** is just another dependency. Code owns a *closed* `Installer` vocabulary (`Brew`, `Apt`, `Dnf`, `Pacman`, `Winget`, `Nix`, `Go`, `Cargo`, `Npm`, `Aikup`, `CardanoUp`, `Tx3up`, `Curl`, `PowerShell`); each declares its detect-binaries, a command template (`brew install {arg}`, `npm install -g {arg}`, `curl -sSfL {arg} | sh`, …), and a **`bootstrap` list of dep ids**. An **empty `bootstrap` list ⇒ terminal** (we detect it, never install it: system package managers, `nix`, the OS shells); a **non-empty list ⇒ bootstrappable** by installing any one of those deps in order (`npm`→`["node"]`, `aikup`→`["aikup"]`, `cargo`→`["rustup","rust"]`). This is what makes the catalog a graph rather than a flat list.
 - **Recipes live in data.** Per-dep recipes are an embedded TOML file (`registry/deps.toml`), keyed by dep id: `binaries` (presence check), `docs` (universal fallback), and an ordered `install` list of `{ installer = arg }` methods. Installer names are validated against the code enum at load (unknown installer → load error, like an unknown `Role`). See §8.1 for why code/data split this way.
 - **Resolver (`resolve`, pure, recursive).** A dep is present if  any of its `binaries` is on `PATH`. For a missing dep, the walk is **two-pass over the ordered `install` methods**: Pass 1 returns the first method whose installer is **detected** (a one-step command); only if none is directly available does Pass 2 walk the methods again and, for the first **bootstrappable** installer, recurse to satisfy one of its `bootstrap` deps and prepend those steps. The result is an ordered, possibly multi-step **plan** (e.g. `aiken` missing with no `nix`/`aikup` → install `aikup` via `npm`, then `aikup install`). Two passes — rather than bootstrapping each method before trying later ones — are exactly why the `nix` path needs no `aikup` when `nix` is present (a single method is still chosen per dep). Cycle detection guards the walk; `docs` is the fallback when nothing resolves (advice never empty, FR-20). Version constraints are out of scope for v1 (presence only); doctor output is **host-dependent by design** (not part of the byte-identical generation contract). Full algorithm in TECH_SPEC §9.4.
 - **Infrastructure deps** install via `cardano-up` (the `CardanoUp` installer); `cardano-up` is itself a dep in `registry/deps.toml` (bootstrappable via its own installer methods). Auto-installing it arrives with the DX.05 install command; bootstrapping `cardano-up` when absent may follow post-RC (ROADMAP).
@@ -340,9 +352,9 @@ install  = [ { aikup = "" }, { nix = "aiken" } ]
 
 ---
 
-## 9. Version-update check (`cli/update.rs`, planned)
+## 9. Version-update check (planned, not yet implemented)
 
-The chosen mechanism for template freshness without runtime template fetching (PRD A-3/FR-24). It is a **thin `cli/` concern** (UX, network, never core):
+The chosen mechanism for template freshness without runtime template fetching (PRD A-3/FR-24). It is a **thin `cli/` concern** (UX, network, never core). No code implements it yet; the `cli/update.rs` module name is already taken by the `add`/`remove` project mutations (§6.4), so this check will land in its own module when built:
 
 - Best-effort check against the GitHub releases API; the notice (if any) is surfaced **before the write phase**, so the user can update and regenerate rather than discovering it post-write. It informs, never gates (the user may Ctrl-C to update first); it never alters generated output.
 - **Latency is hidden, not added.** In **interactive** mode the check fires async at startup and completes during tool selection: zero added latency. In **human one-shot** there's no think-time to hide it, so the result is joined with a **≤1s deadline** behind a spinner before writing (worst case +1s, once/day).

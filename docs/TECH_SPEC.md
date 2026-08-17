@@ -29,7 +29,7 @@ cardano-init remove [ROLE_FLAGS]     # remove a role / infra provider from the c
 
 The `add`/`remove` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix are in §16.
 
-`--format human|json` (planned) is a global flag; default `human`. `json` **implies non-interactive**: it never prompts; if required input is missing it errors instead.
+`--format human|json` is a global flag; default `human`. `json` **implies non-interactive**: it never prompts; if required input is missing it errors instead.
 
 ### 2.2 Init flags (one-shot)
 
@@ -62,14 +62,14 @@ pair is what triggers the collapse into a single `protocol/` component (§3.2, �
 
 | Code | Meaning | Examples |
 |------|---------|----------|
-| `0` | Success (incl. `--dry-run`, and interactive abort-by-choice) | generated; planned |
+| `0` | Success (incl. `--dry-run`, and interactive abort-by-choice) | generated |
 | `2` | **Usage / validation** error | bad flag, `unknown_tool`, `tool_role_mismatch`, `no_roles_selected`, `invalid_project_name`, `name_required` |
 | `1` | **Runtime** error | `dir_exists` (non-empty), registry load failure, render/IO error, web bind failure |
 
 
 The fine-grained "what" is the JSON `error.code` (§2.5); exit code is only the category. Interactive **abort** (user declines the confirmation prompt) exits `0` with no error, and never occurs in `json`/non-interactive mode.
 
-### 2.4 JSON envelope (planned)
+### 2.4 JSON envelope
 
 Every `--format json` response is one of:
 
@@ -106,7 +106,7 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `web_bind` | 1 | `{ port, detail }` |
 
 
-These map 1:1 to the existing `CliError`/`ScaffoldError`/`RegistryError` variants; the planned work is attaching the `code` + serializable `context` and routing through the presenter (ARCHITECTURE §7.2).
+These map 1:1 to the `CliError`/`ScaffoldError`/`RegistryError` variants; `CliError::code()`/`context()` attach the `code` + serializable `context`, routed through the presenter (ARCHITECTURE §7.2).
 
 ---
 
@@ -346,7 +346,7 @@ A file is rendered through MiniJinja **if its `source` ends with `.jinja`**. The
 
 ### 4.3 Rendering contract
 
-MiniJinja environment (planned config):
+MiniJinja environment (`renderer.rs` config):
 - **Undefined = strict**: referencing an undefined variable is a render error (caught at generation, not in the generated project). Authors guard optionals with `{% if has_* %}`.
 - **Autoescape off**: output is code/config, not HTML, so no entity escaping.
 - **Newlines normalized to `\n` (LF)**, UTF-8, for byte-identical cross-platform output (§11).
@@ -437,7 +437,7 @@ The **directory** (via `.gitkeep`) exists for every project except infrastructur
 ### 6.3 `.env` seeding
 
 `.env` is always written (base layer), seeded by `context.rs` with:
-`CARDANO_NETWORK=<network>`, and empty `INDEXER_URL=`, `INDEXER_PORT=`, `NODE_SOCKET_PATH=`. Whichever component provisions a local endpoint fills the connection vars at runtime during its `dev` (§7).
+`CARDANO_NETWORK=<network>`, and empty `INDEXER_URL=`, `INDEXER_PORT=`, `NODE_SOCKET_PATH=`, `OGMIOS_URL=`, `TX_SUBMIT_URL=`, `DOLOS_GRPC_URL=`, `CARDANO_NODE_API_URL=`. Whichever component provisions a local endpoint fills the connection vars at runtime during its `dev` (§7).
 Emitted in **sorted key order** for determinism.
 
 ### 6.4 Write semantics & target dir
@@ -451,8 +451,8 @@ Emitted in **sorted key order** for determinism.
 
 Constants (`contract.rs`): 
 - `BLUEPRINT_PATH = "blueprint/plutus.json"`; 
-- dirs `on-chain|off-chain|infra|test|formal-methods`;
-- env `INDEXER_URL`, `INDEXER_PORT`, `NODE_SOCKET_PATH`, `CARDANO_NETWORK`.
+- dirs `on-chain|off-chain|infra|devnet|formal-methods` (plus the derived `protocol` fullstack dir);
+- env `INDEXER_URL`, `INDEXER_PORT`, `NODE_SOCKET_PATH`, `CARDANO_NETWORK`, and the provider endpoints `OGMIOS_URL`, `TX_SUBMIT_URL`, `DOLOS_GRPC_URL`, `CARDANO_NODE_API_URL`.
 
 **Every component Justfile** exposes `build`, `test`, `clean` and works standalone (its `just build` succeeds with no other roles present). A target that is a no-op for a tool still exists (may print a message). **`dev` is optional**: a component provides it only when it has a genuine watch/daemon/devnet mode — there are no no-op `dev` targets (it is not aggregated at the top level, §7.2, so an absent `dev` costs nothing).
 
@@ -560,6 +560,7 @@ struct InstallerDef {
 | `Go` | `go install {arg}` | `["go"]` |
 | `Aikup` | `aikup install {arg}` | `["aikup"]` |
 | `CardanoUp` | `cardano-up install {arg}` | `["cardano-up"]` |
+| `Tx3up` | `tx3up install {arg}` | `["tx3up"]` |
 
 
 The `arg`'s meaning is the installer's: a package name for managers, an installer-script URL for `Curl`/`PowerShell`, a target for `Aikup`/`CardanoUp`. Adding an installer is a deliberate code change, only when a real recipe needs it (same discipline as roles).
@@ -580,7 +581,7 @@ install=[ {npm="@aiken-lang/aikup"}, {curl="https://install.aiken-lang.org"}, {p
 [aiken] 
 binaries=["aiken"]
 docs="https://aiken-lang.org/installation-instructions"
-install=[ {aikup="latest"}, {nix="aiken"} ]
+install=[ {aikup=""}, {nix="aiken"} ]
 
 [just]
 binaries=["just"] 
@@ -690,7 +691,7 @@ The `contains` form is what keeps detection **honest without overreaching** (per
 
 ---
 
-## 10. Version-update check (planned, `cli/update.rs`)
+## 10. Version-update check (planned, not yet implemented)
 
 Goal: surface "a newer `cardano-init` is available" **before generation**, so the user can update and regenerate with newer templates rather than discovering it post-write (and deleting/regenerating). Constraints: never block agents/CI, never alter generated output, bounded latency, offline-safe.
 
@@ -766,7 +767,7 @@ The command-string the UI emits, and the previewed tree, must equal what the CLI
 ## 14. Non-functional
 
 - **Language/edition:** Rust 2024 edition (the code uses let-chains and `&[Role]` consts). MSRV pinned in `Cargo.toml`/CI to the stable that supports those (≥1.88).
-- **Dependencies (current):** `clap`, `dialoguer`, `minijinja`, `serde`, `serde_json`, `toml`, `rust-embed`, `console`, `thiserror`; `tempfile` (dev). **Planned additions:** a minimal HTTPS client for §10 (e.g. `ureq`), kept off the generation path. The generated *project* always depends on `just`, plus the `system_deps` of whichever tools were selected.
+- **Dependencies (current):** `clap`, `dialoguer`, `minijinja`, `serde`, `serde_json`, `toml`, `rust-embed`, `console`, `indicatif`, `comfy-table`, `miette`, `thiserror`; `libc` (Unix-only, SIGPIPE reset); `tempfile` (dev). **Planned additions:** a minimal HTTPS client for §10 (e.g. `ureq`), kept off the generation path. The generated *project* always depends on `just`, plus the `system_deps` of whichever tools were selected.
 - **Distribution:** single statically-linked binary; generation works fully offline.
 - **Platforms:** Linux, macOS, Windows. Exec-bit-free output (§4.5) and LF normalization (§11) keep behavior identical across them.
 
