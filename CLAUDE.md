@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `cardano-init` is a Rust CLI tool that scaffolds Cardano protocol projects. Users select tools for each functional role (on-chain, off-chain, infrastructure, devnet, formal-methods) and the CLI generates a working monorepo. The authoritative docs live in `docs/`: read `docs/PRD.md` (product), `docs/ARCHITECTURE.md` (system design), and `docs/TECH_SPEC.md` (contracts, schemas, edge cases) before making any significant changes; `docs/ADDING_A_TOOL.md` is the contributor guide and `docs/ROADMAP.md` is the milestone plan.
 
-It's an early prototype: the dependency `doctor`, `list`, and `--format json` are implemented, while a few capabilities (a *hosted* web builder, WASM live preview, min-version checks) remain **planned, not yet implemented**. `docs/ROADMAP.md` tracks what's real vs. upcoming.
+It's an early prototype: the dependency `doctor`, `list`, and `--format json` are implemented, while a few capabilities (a version-update check, min-version checks) remain **planned, not yet implemented**. `docs/ROADMAP.md` tracks what's real vs. upcoming.
 
 ## Commands
 
@@ -35,11 +35,10 @@ The codebase is a single Rust crate. The module structure is as follows (see `do
 - `src/cli/`: impure edge: argument parsing (clap), interactive prompts (dialoguer), and the output presenter. Orchestrates the core; holds no generation logic.
 - `src/registry/`: deserializes embedded TOML tool definitions into typed structs. The `Role` enum (5 roles) is the sole source of truth for the role vocabulary; the registry only *references* roles.
 - `src/scaffold/`: four-phase pipeline: context building → planning → rendering → writing.
-- `src/web/`: impure edge: hand-rolled local web builder server.
 - `src/doctor/`: dependency detection + install advice.
 - `src/contract.rs`: constants for the interface contract (canonical paths, env var names, role dirs).
 
-**Key invariant:** `registry/`, `scaffold/`, `contract`, and the pure part of `doctor/` have zero dependency on `cli/` or `web/` (the impure edges). They are pure logic over data.
+**Key invariant:** `registry/`, `scaffold/`, `contract`, and the pure part of `doctor/` have zero dependency on `cli/` (the impure edge). They are pure logic over data.
 
 ### Data model
 

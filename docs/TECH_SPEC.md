@@ -20,14 +20,13 @@
 
 ```
 cardano-init [INIT_FLAGS]            # default: one-shot if --name given, else interactive
-cardano-init web [--port <u16>]      # local web builder (default port 3000)
 cardano-init doctor                  # check this project's dependencies + advise installs (§9)
 cardano-init list [--format <fmt>]   # capability discovery: roles + tools (§8)
 cardano-init add [ROLE_FLAGS]        # add/swap tools in the project in the cwd (see proposal)
 cardano-init remove [ROLE_FLAGS]     # remove a role / infra provider from the cwd project
 ```
 
-The `add`/`remove` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix are in §16.
+The `add`/`remove` commands operate on the project in the current directory: they reconstruct its `Selection` by **detection** (no metadata file; §9.6), apply the change at the component-directory level, and re-wire the shared top-level files. They accept `--dry-run` (preview only), `--force` (update despite a dirty git tree), `--ignore-warning`, and `--allow-experimental`. `add` takes the same role flags as init (`--on-chain`, `--off-chain`, `--fullstack`, `--infra` (repeatable), `--devnet`, `--formal-methods`); `remove` takes bare role flags plus `--infra <id>`. The full algorithm and edge-case matrix are in §15.
 
 `--format human|json` is a global flag; default `human`. `json` **implies non-interactive**: it never prompts; if required input is missing it errors instead.
 
@@ -64,7 +63,7 @@ pair is what triggers the collapse into a single `protocol/` component (§3.2, �
 |------|---------|----------|
 | `0` | Success (incl. `--dry-run`, and interactive abort-by-choice) | generated |
 | `2` | **Usage / validation** error | bad flag, `unknown_tool`, `tool_role_mismatch`, `no_roles_selected`, `invalid_project_name`, `name_required` |
-| `1` | **Runtime** error | `dir_exists` (non-empty), registry load failure, render/IO error, web bind failure |
+| `1` | **Runtime** error | `dir_exists` (non-empty), registry load failure, render/IO error |
 
 
 The fine-grained "what" is the JSON `error.code` (§2.5); exit code is only the category. Interactive **abort** (user declines the confirmation prompt) exits `0` with no error, and never occurs in `json`/non-interactive mode.
@@ -103,7 +102,6 @@ Stable `code`s, their exit category, and the `context` they carry. The `context`
 | `worktree_dirty` | 1 | `{ path }` — uncommitted changes (or not a git repo) and no `--force` |
 | `registry_load` | 1 | `{ file?, detail }` |
 | `scaffold_error` | 1 | `{ path?, detail }` (asset-not-found, manifest-parse, render, io) |
-| `web_bind` | 1 | `{ port, detail }` |
 
 
 These map 1:1 to the `CliError`/`ScaffoldError`/`RegistryError` variants; `CliError::code()`/`context()` attach the `code` + serializable `context`, routed through the presenter (ARCHITECTURE §7.2).
@@ -233,8 +231,7 @@ even though today's Blaster is `true` (ROADMAP Phase 0 formal-methods deliverabl
 Experimental status is both **surfaced and gated**:
 
 - **Surfaced** everywhere: `list`/`--help` add an `[experimental]` tag and a `Status:` line, the
-  interactive picker tags the choice, the web builder shows an "Experimental" badge (and appends
-  `--allow-experimental` to the emitted command), and generation prints a prominent warning (in the
+  interactive picker tags the choice, and generation prints a prominent warning (in the
   pre-generation summary *and* on success). In JSON, `list`'s `tools[].experimental` and each
   generated `components[].experimental` carry the flag for agents (both additive; no `schema_version`
   bump).
@@ -500,7 +497,7 @@ A component whose `dev` provisions a local endpoint (e.g. Yaci DevKit's devnet) 
 }}
 ```
 
-Both `list` and `web::build_registry_json` render from one shared model (`registry::view`: `role_views()` / `tool_views()`), so they cannot drift. `roles[].multiple` is `true` only for infrastructure (`Role::multiple`). `tools[].fullstack` is `true` when the tool declares a `[fullstack]` template (i.e. `--fullstack <tool>` is valid); it is an additive field (no `schema_version` bump). `fullstack` is a capability, **not** a role — it never appears in `tools[].roles` or in the `roles` array. `tools[].experimental` is `true` for tools that are unstable and/or not yet build-green (§3.2.1); selecting one needs `--allow-experimental` — also additive.
+`list` renders from a shared model (`registry::view`: `role_views()` / `tool_views()`). `roles[].multiple` is `true` only for infrastructure (`Role::multiple`). `tools[].fullstack` is `true` when the tool declares a `[fullstack]` template (i.e. `--fullstack <tool>` is valid); it is an additive field (no `schema_version` bump). `fullstack` is a capability, **not** a role — it never appears in `tools[].roles` or in the `roles` array. `tools[].experimental` is `true` for tools that are unstable and/or not yet build-green (§3.2.1); selecting one needs `--allow-experimental` — also additive.
 
 ---
 
@@ -746,25 +743,12 @@ Identical `(binary, Selection)` ⇒ byte-identical tree. Rules:
 | Interactive: user declines confirm | abort, no write | / 0 |
 | Registry empty / dup id / unknown role (build-time data) | fail load | `registry_load` / 1 |
 | Manifest missing/malformed, asset missing, render fails | fail | `scaffold_error` / 1 |
-| `web` port in use | fail, suggest `--port` flag | `web_bind` / 1 |
 | `json` mode but interactive input needed | error, never prompt | usage / 2 |
 
 
 ---
 
-## 13. Web API (local server)
-
-`web/` serves the builder; endpoints are **internal** (consumed by the bundled `ui.html`), so they use bare payloads, not the §2.4 envelope:
-
-- `GET /` → `ui.html`.
-- `GET /api/registry` → `{ "tools": [ … ] }` (prebuilt once).
-- `GET /api/plan?on_chain=&off_chain=&fullstack=&infra=a,b&devnet=&formal_methods=&nix=&name=` → `{ "files": [ … ] }`, computed by the **real `scaffold::planner`** (no duplicated logic). Invalid input → `{ "error": "…" }` with 4xx. A non-empty `fullstack=X` pushes both on-chain + off-chain assignments for `X` (mirrors the CLI sugar), so the preview shows the collapsed `protocol/` tree.
-
-The command-string the UI emits, and the previewed tree, must equal what the CLI produces for the same selection. Hosted-page strategy is **OD-1, open** (ARCHITECTURE §10.2).
-
----
-
-## 14. Non-functional
+## 13. Non-functional
 
 - **Language/edition:** Rust 2024 edition (the code uses let-chains and `&[Role]` consts). MSRV pinned in `Cargo.toml`/CI to the stable that supports those (≥1.88).
 - **Dependencies (current):** `clap`, `dialoguer`, `minijinja`, `serde`, `serde_json`, `toml`, `rust-embed`, `console`, `indicatif`, `comfy-table`, `miette`, `thiserror`; `libc` (Unix-only, SIGPIPE reset); `tempfile` (dev). **Planned additions:** a minimal HTTPS client for §10 (e.g. `ureq`), kept off the generation path. The generated *project* always depends on `just`, plus the `system_deps` of whichever tools were selected.
@@ -773,20 +757,20 @@ The command-string the UI emits, and the previewed tree, must equal what the CLI
 
 ---
 
-## 15. Open technical decisions
+## 14. Open technical decisions
 
-- **OD-1: Hosted web strategy** (WASM core vs. static-JSON+JS preview): ARCHITECTURE
-  §10.2. The only open architectural decision; affects §13 hosted delivery.
+None currently open. (OD-1, the hosted-web strategy, is closed: the web
+front-end has been dropped — the CLI is the only surface.)
 
 ---
 
-## 16. In-place project updates (`add` / `remove`)
+## 15. In-place project updates (`add` / `remove`)
 
 `cardano-init add`/`remove` edit an **already-generated** project's role/tool composition in the current directory: they add, remove, or replace whole component folders and re-wire the shared top-level files. This is deliberately **not** version management (PRD §5.2): it never pins, upgrades, or migrates the *tooling itself*, and it never rewrites the user's code inside a component it keeps. The change is expressed as a mutation of the project's `Selection`, then applied under a git safety net.
 
 Modules (purity invariant intact, ARCHITECTURE §2): reconstruction is the impure edge in `doctor::probe::reconstruct` (reads the tree); the change-set is pure logic in `scaffold::update`; the disk side effect is `scaffold::writer::apply_update`; the CLI orchestration is `cli::update`. The validation gates are the same pure functions `init` uses (`registry::compat::check`, the experimental predicate), run on the *resulting* selection.
 
-### 16.1 The model: components vs the shared layer
+### 15.1 The model: components vs the shared layer
 
 Every generated project is exactly two things, and the update engine treats them differently.
 
@@ -801,13 +785,13 @@ Every generated project is exactly two things, and the update engine treats them
 | formal-methods | `formal-methods/` | one tool | replace dir |
 | protocol (fused) | `protocol/` | one fullstack tool | replace dir |
 
-A component is **self-contained and standalone** (§7): its rendered content does not depend on which sibling roles are present. This is the load-bearing guarantee — **a slot whose tool is unchanged is never touched** (§16.4).
+A component is **self-contained and standalone** (§7): its rendered content does not depend on which sibling roles are present. This is the load-bearing guarantee — **a slot whose tool is unchanged is never touched** (§15.4).
 
 **Shared layer** — top-level files derived from the *whole* selection, re-rendered on any change: `Justfile`, `.env`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`, and (under `--nix`) `flake.nix` / `.envrc`, plus the `blueprint/.gitkeep` marker.
 
 The update is: **reconstruct → confirm → mutate → validate → diff the slots → re-render the shared layer → write under a git safety net.**
 
-### 16.2 Reconstructing the current `Selection` (detection, not a manifest)
+### 15.2 Reconstructing the current `Selection` (detection, not a manifest)
 
 An update needs the project's current `Selection` as its base state. Rather than persist a manifest at scaffold time, it **reconstructs by detection** — the same choice `doctor` makes (§9.6): the project's structure *is* the source of truth, so there is no second source that can silently drift from the tree. Every field of `Selection` is recoverable, and the one historically "lossy" field — the infra provider set — is present verbatim in `infra/Justfile`.
 
@@ -828,14 +812,14 @@ reconstruct(root, registry) -> Reconstructed {
 
 Any field not cleanly recoverable is marked `low_confidence`.
 
-### 16.3 Confirm — the trust boundary
+### 15.3 Confirm — the trust boundary
 
 Reconstruction is **never trusted silently**; this is what neutralizes detection's one real risk (recovery logic coupled to generated template text). Before any mutation:
 
 - **Interactive** — the reconstructed selection and any `unrecognized`/`low_confidence` items are shown, and the user confirms or corrects. On a **clean** git tree the applied change is fully reviewable/revertible via `git diff`, so it is written straight away (no confirm prompt — good agent DevX); the prompt appears only when `--force` is overriding a **dirty** tree, where the change cannot be cleanly separated from existing edits.
 - **Non-interactive / `--format json`** — no prompts. The reconstruction must be fully recognized: **any `unrecognized` dir is a hard error** (`project_unrecognized`, exit 2). The tool never guesses in automation.
 
-### 16.4 Validate the mutated selection
+### 15.4 Validate the mutated selection
 
 The mutation produces `S_new`, run through **exactly the same gates as `init`** — no new validation logic:
 
@@ -846,7 +830,7 @@ The mutation produces `S_new`, run through **exactly the same gates as `init`** 
 
 Because `Selection`-validity is by construction (ARCHITECTURE §3.3), a validated `S_new` is indistinguishable from one `init` would have built.
 
-### 16.5 The change set
+### 15.5 The change set
 
 Pure logic over `S_old`, `S_new`, and the registry (`scaffold::update`, beside the planner). For each **slot**, compare the tool in `S_old` vs `S_new`:
 
@@ -867,7 +851,7 @@ Pure logic over `S_old`, `S_new`, and the registry (`scaffold::update`, beside t
 
 **The "unchanged slot is safe" guarantee.** Removing off-chain from `{on-chain→aiken, off-chain→meshjs}`: on-chain is `KEEP` (same tool), so `on-chain/` is never in the write set; the standalone-component contract guarantees aiken's render doesn't depend on the removed sibling, so even the content diff shows no change. Only `off-chain/` is removed and the shared layer re-wired.
 
-### 16.6 Safety, write ordering & dry-run
+### 15.6 Safety, write ordering & dry-run
 
 `init`'s writer assumes an empty dir (§6.4, "no `--force`, never overwrites"). Updating writes into a **populated, user-owned** tree, so the update path adds guards *around* the writer rather than changing `init`'s policy:
 
@@ -876,7 +860,7 @@ Pure logic over `S_old`, `S_new`, and the registry (`scaffold::update`, beside t
 - **Write ordering.** `apply_update` (1) `rm -rf`s the `Remove`/`Replace` dirs first — so a `Replace` clears the old tool's files before the new ones are written into the same path; then (2) writes the created/replaced/re-rendered component files; then (3) overwrites only the shared files whose bytes changed. There is nothing else to persist (no manifest). **Kept components are never in the plan**, so user work in an unchanged slot is untouched wherever a crash lands; a crash mid-rewrite of a *changed* slot is covered by the git safety net, and re-running is idempotent.
 - **`--dry-run`.** Prints the change set (CREATE / REMOVE / REPLACE / RE-RENDER / shared-file overwrites) and writes nothing — the auditable plan for humans and agents. `--format json` emits the same as structured data. Each change row names the tool that moved (e.g. `replace Aiken → Scalus`, `add Kupo`, infra `+Dolos`/`-Kupo`).
 
-### 16.7 CLI surface
+### 15.7 CLI surface
 
 ```
 cardano-init add    --off-chain tx3    # add/replace a slot (same flag vocabulary as init)
@@ -890,7 +874,7 @@ cardano-init remove --infra kupo       # drop one infra provider
 - Deliberately **not** a `swap` verb: an `add --off-chain X` onto an occupied off-chain slot *is* the swap (REPLACE), reported as such in the diff so it is never silent.
 - An interactive `edit` (re-open the selector seeded from the detected stack) was considered and **dropped** as low-value — `add`/`remove` (with `--dry-run`) already cover editing the stack.
 
-### 16.8 Edge-case matrix (update path)
+### 15.8 Edge-case matrix (update path)
 
 Error codes are defined in §2.5. This extends the init matrix (§12) for `add`/`remove`.
 
@@ -909,7 +893,7 @@ Error codes are defined in §2.5. This extends the init matrix (§12) for `add`/
 | 11 | `protocol/` → drop off-chain half | REPLACE `protocol/` with a user-named on-chain tool; no in-place split. |
 | 12 | Same tool on both roles, no `[fullstack]` | Two separate dirs (not fused); each removable independently. |
 | 13 | Infra provider set changes | RE-RENDER `infra/` in place from the new set; other slots untouched. |
-| 14 | Unchanged slot (e.g. Aiken while off-chain changes) | KEEP — provably untouched (§16.5). |
+| 14 | Unchanged slot (e.g. Aiken while off-chain changes) | KEEP — provably untouched (§15.5). |
 | 15 | Unrecognized/renamed/foreign component dir | Interactive: surfaced, then a confirm to proceed with the detected stack (the odd dir is left in place, ignored). Non-interactive: `project_unrecognized` (fatal). |
 | 16 | Ambiguous detection (2+ tools match one dir) | Treated as unrecognized (existing `scan_project` behavior). |
 | 17 | `infra/Justfile` hand-edited so providers unparseable | Recovered set shown in confirm; user corrects; non-interactive → treat as unrecognized. |
@@ -920,6 +904,6 @@ Error codes are defined in §2.5. This extends the init matrix (§12) for `add`/
 | 22 | `--dry-run` | Prints the change set; writes nothing. |
 | 23 | Slot swap that leaves a shared file byte-identical | Content diff skips it — no spurious rewrite. |
 
-### 16.9 Determinism
+### 15.9 Determinism
 
 Determinism (§11) is preserved: reconstruction + canonical planning are deterministic, so `--dry-run` output and the applied change set are reproducible for a given `(binary, tree, mutation)`.

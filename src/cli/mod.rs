@@ -42,13 +42,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Launch the web-based project builder on localhost
-    Web {
-        /// Port to listen on
-        #[arg(long, default_value_t = 3000)]
-        port: u16,
-    },
-
     /// Check that the dependencies this project needs are installed, and
     /// advise how to install any that are missing
     Doctor,
@@ -229,10 +222,6 @@ pub enum CliError {
     Scaffold(#[from] ScaffoldError),
 
     #[error("{0}")]
-    #[diagnostic(code(cardano_init::web_bind))]
-    Web(#[from] crate::web::WebError),
-
-    #[error("{0}")]
     #[diagnostic(code(cardano_init::registry_load))]
     Catalog(#[from] crate::doctor::catalog::CatalogError),
 
@@ -406,7 +395,7 @@ pub struct IncompatibleToolsError {
 impl CliError {
     /// Process exit-code category (TECH_SPEC §2.3):
     /// - `2` — usage / validation errors (bad or missing input);
-    /// - `1` — runtime errors (I/O, registry/render failure, web bind, …);
+    /// - `1` — runtime errors (I/O, registry/render failure, …);
     /// - `0` — interactive abort by user choice (not an error).
     pub fn exit_code(&self) -> i32 {
         match self {
@@ -427,7 +416,6 @@ impl CliError {
 
             CliError::Registry(_)
             | CliError::Scaffold(_)
-            | CliError::Web(_)
             | CliError::Catalog(_)
             | CliError::DirectoryExists { .. }
             | CliError::WorktreeDirty { .. }
@@ -441,7 +429,6 @@ impl CliError {
         match self {
             CliError::Registry(_) | CliError::Catalog(_) => "registry_load",
             CliError::Scaffold(_) => "scaffold_error",
-            CliError::Web(_) => "web_bind",
             CliError::DirectoryExists { .. } => "dir_exists",
             CliError::UnknownTool { .. } => "unknown_tool",
             CliError::ToolRoleMismatch { .. } => "tool_role_mismatch",
@@ -469,9 +456,6 @@ impl CliError {
             CliError::Registry(e) => json!({ "detail": e.to_string() }),
             CliError::Catalog(e) => json!({ "detail": e.to_string() }),
             CliError::Scaffold(e) => json!({ "detail": e.to_string() }),
-            CliError::Web(crate::web::WebError::Bind { port, source }) => {
-                json!({ "port": port, "detail": source.to_string() })
-            }
             CliError::DirectoryExists { path } => json!({ "path": path }),
             CliError::UnknownTool {
                 tool_id,
@@ -537,10 +521,6 @@ fn build_help_footer() -> String {
     let _ = writeln!(
         out,
         "  cardano-init --name my-app --on-chain aiken --off-chain meshjs --nix"
-    );
-    let _ = writeln!(
-        out,
-        "  cardano-init web                                    # web-based builder"
     );
 
     out
@@ -612,7 +592,6 @@ pub fn run() -> i32 {
     let format = cli.format;
 
     let result = match cli.command {
-        Some(Command::Web { port }) => crate::web::serve(&registry, port).map_err(CliError::from),
         Some(Command::Doctor) => run_doctor(&registry, format),
         Some(Command::List) => {
             output::print_list(&registry, format);

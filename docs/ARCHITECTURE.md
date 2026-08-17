@@ -14,7 +14,7 @@ Five principles drive every structural decision in the codebase. When a tradeoff
 
 2. **Tools are data-driven; roles are a fixed code vocabulary.** Tools and templates are declarative data embedded at compile time: adding a *tool* is a data change (a TOML file + a template directory + a recompile), never a change to CLI logic. **Roles**, by contrast, are a small fixed vocabulary defined in code (the `Role` enum, §3.1): the registry *references* roles but cannot introduce them. The set is not frozen at a particular number (it can grow) but growing it is a deliberate, rare code change, not a data change.
 
-3. **Pure core, impure edges.** `registry/`, `scaffold/`, `contract`, and the pure part of `doctor/` are pure logic over data with **zero dependency on `cli/`**. All user interaction, terminal formatting, network, and system probing live at the edges (`cli/`, `web/`, the impure half of `doctor/`). This keeps the core testable and makes future extraction (e.g. WASM) straightforward.
+3. **Pure core, impure edges.** `registry/`, `scaffold/`, `contract`, and the pure part of `doctor/` are pure logic over data with **zero dependency on `cli/`**. All user interaction, terminal formatting, network, and system probing live at the edges (`cli/`, the impure half of `doctor/`). This keeps the core testable and makes future extraction straightforward.
 
 4. **Deterministic generation.** Identical inputs produce byte-identical output. This is a hard requirement for coding-agent trust, reproducibility, and snapshot tests. Determinism is guaranteed at the **planning** phase (§6.4).
 
@@ -39,14 +39,14 @@ cardano-init/
 │   │   ├── output.rs           # Presenter: renders results/errors as human text or JSON
 │   │   ├── theme.rs            # Terminal styling palette (console)
 │   │   ├── git.rs              # git helpers: clean-tree gate + init a new project's repo
-│   │   └── update.rs           # add/remove: mutate an existing scaffolded project (§6.4, TECH_SPEC §16)
+│   │   └── update.rs           # add/remove: mutate an existing scaffolded project (§6.4, TECH_SPEC §15)
 │   │
 │   ├── registry/               # Pure: tool + role definitions from embedded TOML
 │   │   ├── mod.rs
 │   │   ├── types.rs            # Role, ToolDef, RoleConfig, Selection, Network, Seam, …
 │   │   ├── loader.rs           # rust-embed → Registry (indexed by id and by role)
 │   │   ├── compat.rs           # off-chain ↔ provider (devnet+infra) seam compatibility
-│   │   └── view.rs             # read-only projections of the registry (for `list`/web)
+│   │   └── view.rs             # read-only projections of the registry (for `list`)
 │   │
 │   ├── scaffold/               # Pure: project generation pipeline
 │   │   ├── mod.rs              # Orchestrator (scaffold / dry_run) + embedded templates
@@ -60,10 +60,6 @@ cardano-init/
 │   │   ├── catalog.rs          # Pure: loads registry/deps.toml → dep recipes
 │   │   ├── installers.rs       # Pure: closed Installer vocabulary + command templating
 │   │   └── probe.rs            # Impure: detect OS, package managers, PATH
-│   │
-│   ├── web/                    # Impure edge: local web builder server
-│   │   ├── mod.rs              # Hand-rolled HTTP server; /, /api/registry, /api/plan
-│   │   └── ui.html             # Embedded single-page UI
 │   │
 │   └── contract.rs             # Interface-contract constants (paths, env vars, dirs)
 │
@@ -84,20 +80,20 @@ Assets are embedded with **rust-embed** via `#[folder = "registry/"]` and `#[fol
 
 ### 2.2 Module dependency graph
 
-The graph flows strictly downward; there are no cycles. The key invariant: **`registry`, `scaffold`, `contract`, and the pure part of `doctor` never depend on `cli` or `web`.**
+The graph flows strictly downward; there are no cycles. The key invariant: **`registry`, `scaffold`, `contract`, and the pure part of `doctor` never depend on `cli`.**
 
 ```
 main.rs
   │
-  ├── cli/ ──────┬─▶ scaffold/ ─▶ registry/        web/ ─┬─▶ scaffold::planner
-  │              ├─▶ doctor/   ─▶ registry/              └─▶ registry/
-  │              ├─▶ registry/                           (web is an edge, like cli)
+  ├── cli/ ──────┬─▶ scaffold/ ─▶ registry/
+  │              ├─▶ doctor/   ─▶ registry/
+  │              ├─▶ registry/
   │              └─▶ contract
   │
   scaffold/, doctor/(pure), registry/  ──▶  contract
 ```
 
-`cli/` and `web/` are sibling **edges**: both orchestrate the pure core and present results. Neither is depended upon by the core.
+`cli/` is the **edge**: it orchestrates the pure core and presents results. It is not depended upon by the core.
 
 ---
 
@@ -114,7 +110,7 @@ pub enum Role { OnChain, OffChain, Infrastructure, Devnet, FormalMethods }
 - `Role::ALL` defines the **canonical order** used for deterministic output.
 - Each role maps to a kebab string (`on-chain`, `formal-methods`, …) for TOML/flags, a `Display` name for humans, and a contract directory (`dir()` → §4).
 - **The enum is the sole source of truth for the role vocabulary: roles are *not* defined by the repository data.** A tool's `[roles.<kebab>]` blocks merely *reference* existing roles; the registry cannot introduce a new one. Role strings are validated against the enum at load time via `Role::from_kebab` (an unknown role → `RegistryError::UnknownRole`). What the registry data determines is which *tools* exist and which of these fixed roles each can fill, not the set of roles itself.
-- Adding a role is therefore a deliberate code change touching every site that names roles: a new `Role` variant + `Role::ALL` + `from_kebab`/`as_kebab`/`dir()`/`Display`, a `contract::DIR_*` constant, `TemplateContext` handling, a CLI flag, and the web query params. Adding a *tool*, by contrast, is pure data. The role set is small and grows rarely.
+- Adding a role is therefore a deliberate code change touching every site that names roles: a new `Role` variant + `Role::ALL` + `from_kebab`/`as_kebab`/`dir()`/`Display`, a `contract::DIR_*` constant, `TemplateContext` handling, and a CLI flag. Adding a *tool*, by contrast, is pure data. The role set is small and grows rarely.
 - The **fullstack `protocol/`** component (§3.2) is a related but distinct kind of code change: it adds a `contract::DIR_PROTOCOL` constant and `TemplateContext` handling, but **no** `Role` variant — it is a *fused component* derived from two existing roles, not a sixth role. New fullstack *tools* remain pure data (a `[fullstack]` table + a template dir).
 
 ### 3.2 Tools
@@ -282,7 +278,6 @@ Render processes each entry whose source is a `.jinja` template through MiniJinj
 
 - **One-shot** (`--name` + role flags): flags → `Selection` in `oneshot.rs`, non-interactive, deterministic. Primary path for agents and CI.
 - **Interactive** (no `--name`): guided `dialoguer` flow in `interactive.rs`.
-- **`web` subcommand**: launches the local builder server (§10).
 - **`list` subcommand**: capability discovery; lists roles/tools, human by default, `--format json` for agents (see §7.3).
 
 A safety check refuses to overwrite an existing target directory.
@@ -297,7 +292,7 @@ To serve both humans and agents without scattering format branches:
 ### 7.3 Machine-readable errors & discovery (PRD FR-13/FR-15)
 
 - **Errors** carry a **stable string code** (e.g. `unknown_tool`, `tool_role_mismatch`, `name_required`, `dir_exists`) plus context (offending input + valid alternatives) and map to **meaningful exit codes**. In `--format json`, errors serialize to a stable shape on stderr; the core never falls back to interactive prompting in non-interactive mode. `CliError::code()`/`context()` carry the code + serializable context (§2.5).
-- **Discovery** is the **`list` subcommand** (`cardano-init list`) that emits the registry (roles, tools, the roles each fills, languages). Human by default, **`--format json`** for agents (§8 schema). Both `list` and `web::build_registry_json` render from one shared model, `registry::view` (`role_views()` / `tool_views()`), so the JSON cannot drift; the human tool block reuses `cli::format_tool` (shared with `--help`).
+- **Discovery** is the **`list` subcommand** (`cardano-init list`) that emits the registry (roles, tools, the roles each fills, languages). Human by default, **`--format json`** for agents (§8 schema). `list` renders from the shared model `registry::view` (`role_views()` / `tool_views()`); the human tool block reuses `cli::format_tool` (shared with `--help`).
 
 ---
 
@@ -363,31 +358,7 @@ The chosen mechanism for template freshness without runtime template fetching (P
 
 ---
 
-## 10. Web UI architecture
-
-The CLI is the **single source of truth**; the web UI never generates a project: it configures, previews structure, and emits a copyable `cardano-init …` command.
-
-### 10.1 Local server (`web/`, exists)
-
-A hand-rolled, zero-dependency HTTP/1.1 server (`TcpListener` + threads) chosen to keep the "single static binary, zero runtime deps" goal. Routes:
-- `GET /` → embedded `ui.html`.
-- `GET /api/registry` → registry as JSON (prebuilt once).
-- `GET /api/plan?…` → runs the **actual Rust planner** and returns the file tree.
-
-Because `/api/plan` calls `scaffold::planner`, the local server's preview is guaranteed to match real generation: no duplicated logic.
-
-### 10.2 Hosted page
-
-A hosted page has no binary behind it. The key observation: the **command string** is trivial to assemble in JS (concatenate flags) and needs *no* planner. Only the live *file-tree preview* needs planner logic. So the resolution is staged:
-
-- **RC (DX.05): static builder.** Ship the registry as **static JSON** and assemble the `cardano-init …` command in plain JS. No binary, no planner, no drift on the command string. The planner-backed **live tree preview is dropped** for the RC (the command output is the deliverable). Hostable as a pure static site.
-- **Post-RC: WASM live-preview.** Compile the pure registry+planner to WASM so the hosted builder shows the exact file tree with zero logic duplication (realizes the "future extraction" goal). Deferred to Phase 2 (ROADMAP): adds a WASM build/bindings workstream not worth the RC-deadline risk.
-
-The local `serve` path (10.1) ships regardless and keeps its planner-backed preview. If a JS tree-preview approximation is ever added before WASM, it must be tested against the planner's output to bound drift.
-
----
-
-## 11. Testing strategy
+## 10. Testing strategy
 
 - **Unit (pure core):** registry loading (every TOML parses, fields present); context building; planning (exact file set + order); rendering (context + template → expected output); doctor `resolve` over synthetic environments (incl. multi-step bootstrap chains and the cycle guard).
 - **Contract compliance (mechanical):** for each template, assert the Justfile exposes `build`/`test`/`clean` (`dev` is optional); for on-chain, assert `just build` produces `blueprint/plutus.json`. This is what lets us avoid testing tool combinations.
@@ -398,18 +369,18 @@ The local `serve` path (10.1) ships regardless and keeps its planner-backed prev
 
 ---
 
-## 12. Extensibility: adding a tool
+## 11. Extensibility: adding a tool
 
 1. Add `registry/tools/<tool>.toml` with metadata, `system_deps`, `nix_packages`, and a `[roles.<role>]` block per supported role.
 2. Add `templates/<tool>/<role>/` with a `manifest.toml` and template files (conforming to the contract, §4).
 3. If the tool introduces a new `system_deps` id, add a `registry/deps.toml` entry (pure data; code is needed only if the dep requires a brand-new installer, §8).
-4. Add the per-tool tests (§11).
+4. Add the per-tool tests (§10).
 5. Recompile (assets are embedded at compile time).
 
 No CLI/core code changes are required for a new tool. Contract conformance guarantees it composes with every existing tool in other roles.
 
 ---
 
-## 13. Open architectural decisions
+## 12. Open architectural decisions
 
 *None currently open.* 
