@@ -567,16 +567,20 @@ fi
 import {
   closeSync,
   ftruncateSync,
+  mkdirSync,
   openSync,
   readFileSync,
+  rmdirSync,
   writeSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 // This script lives at test/scripts/; the project root is two levels up.
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const envPath = resolve(projectRoot, ".env");
+const lockPath = `${envPath}.lock`;
 
 const clear = process.argv.includes("--clear");
 
@@ -613,34 +617,56 @@ function openEnv(path) {
   }
 }
 
-const envFd = openEnv(envPath);
-try {
-  const original = readFileSync(envFd, "utf-8");
-  const lines = original.length > 0 ? original.split("\n") : [];
-
-  const pending = new Set(Object.keys(updates));
-  const out = [];
-  for (const line of lines) {
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
-    const key = match?.[1];
-    if (key && removeKeys.has(key)) continue; // drop this line
-    if (key && pending.has(key)) {
-      out.push(`${key}=${updates[key]}`);
-      pending.delete(key);
-    } else {
-      out.push(line);
+async function acquireLock(path) {
+  const retryMs = 100;
+  const attempts = 300;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      mkdirSync(path, { mode: 0o700 });
+      return;
+    } catch (error) {
+      if (!hasCode(error, "EEXIST")) throw error;
+      if (attempt === attempts - 1) {
+        throw new Error(`Timed out waiting for ${path}`);
+      }
+      await delay(retryMs);
     }
   }
-  // Append any keys that weren't already present.
-  for (const key of pending) out.push(`${key}=${updates[key]}`);
+}
 
-  // Normalize to a single trailing newline (LF).
-  let text = out.join("\n").replace(/\n+$/, "");
-  if (text.length > 0) text += "\n";
-  ftruncateSync(envFd, 0);
-  writeSync(envFd, text, 0, "utf-8");
+await acquireLock(lockPath);
+try {
+  const envFd = openEnv(envPath);
+  try {
+    const original = readFileSync(envFd, "utf-8");
+    const lines = original.length > 0 ? original.split("\n") : [];
+
+    const pending = new Set(Object.keys(updates));
+    const out = [];
+    for (const line of lines) {
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
+      const key = match?.[1];
+      if (key && removeKeys.has(key)) continue; // drop this line
+      if (key && pending.has(key)) {
+        out.push(`${key}=${updates[key]}`);
+        pending.delete(key);
+      } else {
+        out.push(line);
+      }
+    }
+    // Append any keys that weren't already present.
+    for (const key of pending) out.push(`${key}=${updates[key]}`);
+
+    // Normalize to a single trailing newline (LF).
+    let text = out.join("\n").replace(/\n+$/, "");
+    if (text.length > 0) text += "\n";
+    ftruncateSync(envFd, 0);
+    writeSync(envFd, text, 0, "utf-8");
+  } finally {
+    closeSync(envFd);
+  }
 } finally {
-  closeSync(envFd);
+  rmdirSync(lockPath);
 }
 
 if (clear) {

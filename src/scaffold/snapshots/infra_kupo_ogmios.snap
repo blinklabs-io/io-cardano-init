@@ -313,10 +313,24 @@ set -e
 
 CONTEXT="snap-project"
 ENV_FILE="../.env"
+LOCK_DIR="${ENV_FILE}.lock"
 
 # Load cardano-up's outputs (e.g. KUPO_URL, OGMIOS_URL, CARDANO_NODE_SOCKET_PATH)
 # as shell variables. `context env` emits `export KEY=VALUE` lines.
 eval "$(cardano-up context env --context "$CONTEXT")"
+
+# Serialize updates with other generated writers of the shared .env file.
+attempt=0
+until mkdir "$LOCK_DIR" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 30 ]; then
+        printf 'Timed out waiting for %s\n' "$LOCK_DIR" >&2
+        exit 1
+    fi
+    sleep 1
+done
+trap 'rmdir "$LOCK_DIR"' 0
+trap 'exit 1' 1 2 15
 
 # Replace NAME=… in $ENV_FILE (append if absent); leaves all other lines intact.
 set_key() {
