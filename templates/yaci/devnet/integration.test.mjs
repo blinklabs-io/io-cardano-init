@@ -75,7 +75,7 @@ if (!indexerUrl) {
 // http://localhost:8080/api/v1/ . Tolerate a missing one.
 const configuredBase = indexerUrl.endsWith("/") ? indexerUrl : `${indexerUrl}/`;
 if (configuredBase !== yaciIndexerUrl) {
-  fail("INDEXER_URL must point to the local Yaci DevKit indexer.");
+  fail(`INDEXER_URL must be ${yaciIndexerUrl}.`);
 }
 const base = yaciIndexerUrl;
 
