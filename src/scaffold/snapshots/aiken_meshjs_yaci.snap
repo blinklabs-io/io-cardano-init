@@ -1887,7 +1887,13 @@ fi
 // The write is idempotent: existing keys are replaced in place (no duplicate
 // lines accumulate across repeated `just dev` runs); every other line in the
 // .env — CARDANO_NETWORK, comments, blanks — is preserved untouched.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  ftruncateSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1912,29 +1918,53 @@ const updates = clear
   : SET;
 const removeKeys = clear ? new Set(["YACI_ADMIN_URL"]) : new Set();
 
-const original = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
-const lines = original.length > 0 ? original.split("\n") : [];
+function hasCode(error, code) {
+  return error !== null && typeof error === "object" && error.code === code;
+}
 
-const pending = new Set(Object.keys(updates));
-const out = [];
-for (const line of lines) {
-  const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
-  const key = match?.[1];
-  if (key && removeKeys.has(key)) continue; // drop this line
-  if (key && pending.has(key)) {
-    out.push(`${key}=${updates[key]}`);
-    pending.delete(key);
-  } else {
-    out.push(line);
+function openEnv(path) {
+  try {
+    return openSync(path, "r+");
+  } catch (error) {
+    if (!hasCode(error, "ENOENT")) throw error;
+    try {
+      return openSync(path, "wx+", 0o600);
+    } catch (createError) {
+      if (!hasCode(createError, "EEXIST")) throw createError;
+      return openSync(path, "r+");
+    }
   }
 }
-// Append any keys that weren't already present.
-for (const key of pending) out.push(`${key}=${updates[key]}`);
 
-// Normalize to a single trailing newline (LF).
-let text = out.join("\n").replace(/\n+$/, "");
-if (text.length > 0) text += "\n";
-writeFileSync(envPath, text);
+const envFd = openEnv(envPath);
+try {
+  const original = readFileSync(envFd, "utf-8");
+  const lines = original.length > 0 ? original.split("\n") : [];
+
+  const pending = new Set(Object.keys(updates));
+  const out = [];
+  for (const line of lines) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
+    const key = match?.[1];
+    if (key && removeKeys.has(key)) continue; // drop this line
+    if (key && pending.has(key)) {
+      out.push(`${key}=${updates[key]}`);
+      pending.delete(key);
+    } else {
+      out.push(line);
+    }
+  }
+  // Append any keys that weren't already present.
+  for (const key of pending) out.push(`${key}=${updates[key]}`);
+
+  // Normalize to a single trailing newline (LF).
+  let text = out.join("\n").replace(/\n+$/, "");
+  if (text.length > 0) text += "\n";
+  ftruncateSync(envFd, 0);
+  writeSync(envFd, text, 0, "utf-8");
+} finally {
+  closeSync(envFd);
+}
 
 if (clear) {
   console.log(`Cleared Yaci connection details from ${envPath}`);
