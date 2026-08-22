@@ -11,22 +11,84 @@ set -e
 CONTEXT="{{ infra_context_name }}"
 ENV_FILE="../.env"
 LOCK_DIR="${ENV_FILE}.lock"
+LOCK_OWNER="${LOCK_DIR}/owner"
+LOCK_PROCESS_START="$(ps -o lstart= -p $$ | awk '{$1=$1; print}')"
+LOCK_OWNER_RECORD="$$
+$LOCK_PROCESS_START"
+LOCK_OWNER_DRAFT=""
 
 # Load cardano-up's outputs (e.g. KUPO_URL, OGMIOS_URL, CARDANO_NODE_SOCKET_PATH)
 # as shell variables. `context env` emits `export KEY=VALUE` lines.
 eval "$(cardano-up context env --context "$CONTEXT")"
 
-# Serialize updates with other generated writers of the shared .env file.
+# Serialize updates with other generated writers of the shared .env file. The
+# PID and process start value let either writer reclaim a lock whose owner has
+# exited, including after a reboot reuses the PID.
+if [ -z "$LOCK_PROCESS_START" ]; then
+    printf 'Unable to identify lock owner process\n' >&2
+    exit 1
+fi
+LOCK_OWNER_DRAFT="$(mktemp "${LOCK_DIR}.owner.XXXXXX")"
+printf '%s\n' "$LOCK_OWNER_RECORD" > "$LOCK_OWNER_DRAFT"
+
+lock_is_stale() {
+    owner_pid="$(sed -n '1p' "$LOCK_OWNER" 2>/dev/null || true)"
+    owner_start="$(sed -n '2p' "$LOCK_OWNER" 2>/dev/null || true)"
+    case "$owner_pid" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    if [ -z "$owner_start" ]; then
+        return 0
+    fi
+    current_start="$(ps -o lstart= -p "$owner_pid" 2>/dev/null | awk '{$1=$1; print}')"
+    [ -z "$current_start" ] || [ "$current_start" != "$owner_start" ]
+}
+
+reclaim_stale_lock() {
+    if [ ! -f "$LOCK_OWNER" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null
+        return
+    fi
+    if ! lock_is_stale; then
+        return 1
+    fi
+    stale_owner="${LOCK_DIR}.stale.$$.$1"
+    if ! mv "$LOCK_OWNER" "$stale_owner" 2>/dev/null; then
+        return 1
+    fi
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    rm -f "$stale_owner"
+}
+
+release_lock() {
+    record="$(cat "$LOCK_OWNER" 2>/dev/null || true)"
+    if [ "$record" = "$LOCK_OWNER_RECORD" ]; then
+        rm -f "$LOCK_OWNER"
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+    rm -f "$LOCK_OWNER_DRAFT"
+}
+
 attempt=0
-until mkdir "$LOCK_DIR" 2>/dev/null; do
+while [ "$attempt" -lt 30 ]; do
     attempt=$((attempt + 1))
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        if ln "$LOCK_OWNER_DRAFT" "$LOCK_OWNER" 2>/dev/null; then
+            rm -f "$LOCK_OWNER_DRAFT"
+            break
+        fi
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    else
+        reclaim_stale_lock "$attempt" || true
+    fi
     if [ "$attempt" -ge 30 ]; then
         printf 'Timed out waiting for %s\n' "$LOCK_DIR" >&2
+        rm -f "$LOCK_OWNER_DRAFT"
         exit 1
     fi
     sleep 1
 done
-trap 'rmdir "$LOCK_DIR"' 0
+trap release_lock 0
 trap 'exit 1' 1 2 15
 
 # Replace NAME=… in $ENV_FILE (append if absent); leaves all other lines intact.
