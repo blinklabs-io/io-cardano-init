@@ -388,8 +388,7 @@ mod tests {
         let devnet = reg.tools_for_role(Role::Devnet);
         let mut ids: Vec<&str> = devnet.iter().map(|t| t.id.as_str()).collect();
         ids.sort();
-        // Yaci DevKit is a local devnet, so it fills the devnet role (not infra).
-        assert_eq!(ids, vec!["yaci"]);
+        assert_eq!(ids, vec!["dingo", "yaci"]);
     }
 
     #[test]
