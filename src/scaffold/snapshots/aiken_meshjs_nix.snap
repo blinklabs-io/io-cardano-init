@@ -213,6 +213,7 @@ node_modules/
 
 # Environment
 .env.local
+.env.lock
 
 # IDE
 .idea/
