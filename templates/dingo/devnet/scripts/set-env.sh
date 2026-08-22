@@ -2,7 +2,7 @@
 # Publish or clear Dingo's standard connection keys in the project .env.
 set -eu
 
-project_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+project_root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 env_path="$project_root/.env"
 mode=${1:-set}
 port=${DINGO_DEVNET_BLOCKFROST_PORT:-3000}

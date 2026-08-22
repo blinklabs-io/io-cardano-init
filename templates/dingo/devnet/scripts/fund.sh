@@ -2,7 +2,7 @@
 # Fund a testnet address from Dingo's bundled devnet faucet key.
 set -eu
 
-devnet_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+devnet_dir=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 cd "$devnet_dir"
 
 address=${1:-}

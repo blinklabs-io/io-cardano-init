@@ -3,7 +3,7 @@
 # verify the resulting UTxO through Blockfrost, and always tear down.
 set -eu
 
-devnet_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+devnet_dir=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 cd "$devnet_dir"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then

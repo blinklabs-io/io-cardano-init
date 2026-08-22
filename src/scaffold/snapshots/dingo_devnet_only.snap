@@ -319,11 +319,11 @@ exec /bin/entrypoint.sh serve
 # Run Compose with a stable project-scoped name from any working directory.
 set -eu
 
-devnet_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-project_root=$(CDPATH='' cd -- "$devnet_dir/.." && pwd)
+devnet_dir=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
+project_root=$(CDPATH='' cd "$devnet_dir/.." && pwd)
 
 if [ -z "${COMPOSE_PROJECT_NAME:-}" ]; then
-  project_name=$(basename -- "$project_root")
+  project_name=$(basename "$project_root")
   project_name=$(printf '%s' "$project_name" |
     tr '[:upper:]' '[:lower:]' |
     sed -E -e 's/[^a-z0-9_-]/-/g' -e 's/^[^a-z0-9]+//')
@@ -342,7 +342,7 @@ exec docker compose "$@"
 # Publish or clear Dingo's standard connection keys in the project .env.
 set -eu
 
-project_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+project_root=$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)
 env_path="$project_root/.env"
 mode=${1:-set}
 port=${DINGO_DEVNET_BLOCKFROST_PORT:-3000}
@@ -418,7 +418,7 @@ fi
 # Fund a testnet address from Dingo's bundled devnet faucet key.
 set -eu
 
-devnet_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+devnet_dir=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 cd "$devnet_dir"
 
 address=${1:-}
@@ -488,7 +488,7 @@ sh scripts/compose.sh exec -T dingo \
 # verify the resulting UTxO through Blockfrost, and always tear down.
 set -eu
 
-devnet_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+devnet_dir=$(CDPATH='' cd "$(dirname "$0")/.." && pwd)
 cd "$devnet_dir"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
