@@ -562,7 +562,7 @@ struct InstallerDef {
 
 The `arg`'s meaning is the installer's: a package name for managers, an installer-script URL for `Curl`/`PowerShell`, a target for `Aikup`/`CardanoUp`. Adding an installer is a deliberate code change, only when a real recipe needs it (same discipline as roles).
 
-**Recipes (data, `registry/deps.toml`)**: keyed by dep id; `install` is an ordered list of single-key `{ installer = arg }` methods (order = preference). Installer keys are validated against the `Installer` enum at load (unknown → load error):
+**Recipes (data, `registry/deps.toml`)**: keyed by dep id; `binaries_by_os` is an optional map of platform-specific presence alternatives, and `install` is an ordered list of single-key `{ installer = arg }` methods (order = preference). Installer keys and OS keys are validated at load (unknown → load error):
 
 ```toml
 [node]  
@@ -585,6 +585,12 @@ binaries=["just"]
 docs="https://just.systems"
 install=[ {brew="just"}, {apt="just"}, {cargo="just"}, {nix="just"} ]
 
+[env-lock]
+binaries=[]
+binaries_by_os={linux=["flock"], macos=["lockf"], windows=["powershell.exe", "pwsh.exe"]}
+docs="https://github.com/input-output-hk/cardano-init#system-requirements"
+install=[]
+
 [process-compose]
 binaries=["process-compose"]
 docs="https://f1bonacc1.github.io/process-compose/"
@@ -592,7 +598,12 @@ install=[ {brew="process-compose"}, {go="github.com/f1bonacc1/process-compose@la
 ```
 
 ```rust
-struct DepRecipe { binaries: Vec<String>, docs: String, install: Vec<(Installer, String)> }  // ordered
+struct DepRecipe {
+    binaries: Vec<String>,
+    binaries_by_os: Map<String, Vec<String>>, // optional linux/macos/windows/other alternatives
+    docs: String,
+    install: Vec<(Installer, String)>,         // ordered
+}
 type DepCatalog = HashMap<String, DepRecipe>;   // dep id → recipe (loaded from registry/deps.toml)
 ```
 
@@ -601,11 +612,15 @@ Installers (logic, closed vocab) are code; recipes (which installer + arg per de
 ### 9.3 Environment (impure probe)
 
 ```rust
-struct Environment { os: Os, installers: HashSet<Installer> /* detected present */ }
+struct Environment {
+    os: Os,
+    installers: HashSet<Installer>,
+    present_binaries: HashSet<String>,
+}
 enum Os { Linux, MacOs, Windows, Other }
 ```
 
-`probe.rs` detects the OS and which installers are present (installer available if one of its `detect` binaries is on `PATH`). A **dep** is present if one of its `binaries` is on `PATH`. No execution, no version (v1).
+`probe.rs` detects the OS and which installers are present (installer available if one of its `detect` binaries is on `PATH`). A **dep** is present if one of its general `binaries`, or one of the current OS entries in `binaries_by_os`, is on `PATH`. No execution, no version (v1).
 
 ### 9.4 Resolver (pure, recursive) & Report
 
@@ -613,7 +628,8 @@ enum Os { Linux, MacOs, Windows, Other }
 resolve(dep_id, env, catalog, seen) -> Plan | Unresolved:
     if dep_id ∈ seen:                  return Unresolved          // cycle guard
     rec = catalog[dep_id]
-    if any(rec.binaries on PATH):      return Plan([])            // already present
+    presence = rec.binaries + rec.binaries_by_os[env.os]
+    if any(presence on PATH):          return Plan([])            // already present
 
     // Pass 1 (preferred): the first method whose installer is usable right now.
     for (installer, arg) in rec.install:                          // ordered preference
@@ -669,7 +685,7 @@ The standalone `cardano-init doctor` takes **no flags describing the project**: 
 3. A tool matches if **any** of its `detect` signatures matches. Exactly one match ⇒ the component is identified. On an ambiguous multiple, a **definitive** match wins: a bare-path (existence-only) signature is a tool-unique manifest (e.g. `trix.toml`), whereas a `contains` needle only proves a *shared* file mentions the tool (e.g. a Tx3 project's `package.json` pulls in `@meshsdk` as a library, tripping MeshJS's needle). If exactly one candidate matched via a bare-path signature, that tool is identified; otherwise (zero matches, or still-ambiguous after this tiebreak) the directory is reported as **unrecognized** (renamed, modified, or a foreign project). A renamed *directory* simply isn't found, so that role is absent.
 4. The required set is `{just}` ∪ the `system_deps` of every identified tool (§9.1), fed to the resolver (§9.4).
 
-**Infrastructure is the exception.** The aggregated `infra/` component has no per-tool subdirs (it's the single cardano-up driver), so it is *not* matched against per-tool `detect` signatures. Instead the scan recognizes it by a driver marker — `infra/Justfile` referencing `cardano-up` — and reports a synthetic `cardano-up` component (`doctor::INFRA_DRIVER_ID`). Its contribution to the required set is the **union of all registered infra tools' `system_deps`** (`{docker, cardano-up}`), data-driven from the registry. So infra tools carry `detect = []`.
+**Infrastructure is the exception.** The aggregated `infra/` component has no per-tool subdirs (it's the single cardano-up driver), so it is *not* matched against per-tool `detect` signatures. Instead the scan recognizes it by a driver marker — `infra/Justfile` referencing `cardano-up` — and reports a synthetic `cardano-up` component (`doctor::INFRA_DRIVER_ID`). Its contribution to the required set is the **union of all registered infra tools' `system_deps`** (`{docker, cardano-up, env-lock}`), data-driven from the registry. So infra tools carry `detect = []`.
 
 **Fullstack `protocol/` is scanned like a normal component.** `protocol/` is not a `Role::ALL` directory, so it is handled by a dedicated branch: if `protocol/` exists, it is matched against the `detect` signatures of the tools that declare a `[fullstack]` template (the same per-tool signatures used for the role dirs — a fullstack tool's signatures must therefore be present in its fullstack template). Exactly one match ⇒ that component is identified; zero/ambiguous ⇒ `protocol/` is *unrecognized*. Unlike infra, the identified tool is a **real registry tool**, so its `system_deps` feed the required set via the normal `registry.get` path (no synthetic id).
 
