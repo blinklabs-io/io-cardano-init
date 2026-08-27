@@ -621,26 +621,6 @@ pub fn run() -> i32 {
     }
 }
 
-/// The required dependencies for a set of tool ids: the base dep `just`, plus
-/// the `system_deps` of each tool (deduped/sorted later by the resolver).
-///
-/// The aggregated infra component is reported by the scan under the synthetic
-/// `INFRA_DRIVER_ID`; it contributes the union of every infra tool's
-/// `system_deps` (data-driven from the registry — `{docker, cardano-up}`).
-fn required_deps<'a>(tool_ids: impl Iterator<Item = &'a str>, registry: &Registry) -> Vec<String> {
-    let mut deps = vec![crate::doctor::BASE_DEP.to_string()];
-    for id in tool_ids {
-        if id == crate::doctor::INFRA_DRIVER_ID {
-            for tool in registry.tools_for_role(crate::registry::types::Role::Infrastructure) {
-                deps.extend(tool.system_deps.iter().cloned());
-            }
-        } else if let Some(tool) = registry.get(id) {
-            deps.extend(tool.system_deps.iter().cloned());
-        }
-    }
-    deps
-}
-
 fn required_deps_for_assignments<'a>(
     assignments: impl Iterator<Item = (&'a str, crate::registry::types::Role)>,
     registry: &Registry,
@@ -682,10 +662,9 @@ fn required_deps_for_components(
         if matches!(
             component.kind,
             crate::doctor::probe::ComponentKind::Protocol
-        ) {
-            if let Some(tool) = registry.get(&component.tool_id) {
-                deps.extend(tool.system_deps.iter().cloned());
-            }
+        ) && let Some(tool) = registry.get(&component.tool_id)
+        {
+            deps.extend(tool.system_deps.iter().cloned());
         }
     }
     deps
@@ -1154,7 +1133,14 @@ mod tests {
     fn required_deps_unions_just_with_tool_deps() {
         let registry = Registry::load().unwrap();
         // aiken → ["aiken"], meshjs → ["node"]; plus the base dep "just".
-        let deps = required_deps(["aiken", "meshjs"].into_iter(), &registry);
+        let deps = required_deps_for_assignments(
+            [
+                ("aiken", crate::registry::types::Role::OnChain),
+                ("meshjs", crate::registry::types::Role::OffChain),
+            ]
+            .into_iter(),
+            &registry,
+        );
         assert!(deps.contains(&"just".to_string()));
         assert!(deps.contains(&"aiken".to_string()));
         assert!(deps.contains(&"node".to_string()));
@@ -1165,7 +1151,14 @@ mod tests {
         let registry = Registry::load().unwrap();
         // The aggregated infra component (reported under INFRA_DRIVER_ID by the
         // scan) contributes the union of infra tools' system_deps.
-        let deps = required_deps([crate::doctor::INFRA_DRIVER_ID].into_iter(), &registry);
+        let deps = required_deps_for_assignments(
+            [(
+                crate::doctor::INFRA_DRIVER_ID,
+                crate::registry::types::Role::Infrastructure,
+            )]
+            .into_iter(),
+            &registry,
+        );
         assert!(deps.contains(&"just".to_string()));
         assert!(deps.contains(&"docker".to_string()));
         assert!(deps.contains(&"cardano-up".to_string()));
