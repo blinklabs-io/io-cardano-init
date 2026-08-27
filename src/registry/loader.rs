@@ -122,6 +122,8 @@ struct ToolMetaToml {
 #[derive(Deserialize)]
 struct RoleConfigToml {
     template: String,
+    #[serde(default)]
+    system_deps: Option<Vec<String>>,
 }
 
 /// A `detect` entry is either a bare path (existence check) or a table with an
@@ -165,6 +167,7 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
             role,
             RoleConfig {
                 template: cfg.template,
+                system_deps: cfg.system_deps,
             },
         );
     }
@@ -201,6 +204,7 @@ fn to_tool_def(file_name: &str, raw: ToolFileToml) -> Result<ToolDef, RegistryEr
 
     let fullstack = raw.fullstack.map(|f| RoleConfig {
         template: f.template,
+        system_deps: f.system_deps,
     });
 
     let compat = match raw.compat {

@@ -15,9 +15,11 @@ detect = [{ file = "docker-compose.yml", contains = "ghcr.io/blinklabs-io/dingo"
 
 [roles.devnet]
 template = "dingo/devnet"
+system_deps = ["docker"]
 
 [roles.infrastructure]
 template = "_infra/cardano-up"
+system_deps = ["docker", "cardano-up"]
 
 [infra]
 cardano_up_package = "dingo"
