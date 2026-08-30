@@ -107,4 +107,24 @@ case "$utxos" in
 esac
 
 echo "Dingo faucet transaction is indexed by the Blockfrost API."
+
+# If an off-chain component is present, run its suite against this devnet too,
+# the way the Yaci devnet test does. The faucet round trip above only proves
+# plain value transfer; it never calls the provider's script-evaluation
+# endpoint, which is why a devnet that could not build a single script
+# transaction still passed this test. Running the real mint/lock/redeem
+# round-trip here is what keeps that class of gap visible.
+#
+# Generic — keyed on the off-chain role's directory, not on any specific tool.
+if [ -f ../off-chain/Justfile ]; then
+  echo "Running off-chain integration tests against the devnet ..."
+  # Dingo has no admin topup endpoint, so the suite funds through the faucet
+  # script instead. It resolves its own directory, so an absolute path works
+  # from the off-chain component's working directory, and it inherits
+  # COMPOSE_PROJECT_NAME so it targets this ephemeral devnet.
+  INDEXER_URL="http://localhost:$port/api/v0/" \
+  CARDANO_INIT_FUND_CMD="sh $devnet_dir/scripts/fund.sh" \
+    just -f ../off-chain/Justfile test
+fi
+
 echo "Dingo devnet integration test passed."

@@ -65,3 +65,40 @@ sh scripts/compose.sh exec -T dingo \
   --socket-path "$socket" \
   --testnet-magic 42 \
   --tx-file "$tx_signed"
+
+# Wait for the transaction to reach the ledger before returning. Without this,
+# a second fund call selects the same faucet UTxO, because the first spend is
+# still only in the mempool, and `transaction build` then fails with
+# "The UTxO is empty". Callers that fund more than once in a row (the off-chain
+# integration suite funds collateral and then working funds) depend on this.
+# `transaction txid` prints a bare hash on some cardano-cli versions and
+# `{"txhash": "..."}` on others, so pull the hex out of whichever it is.
+txid=$(sh scripts/compose.sh exec -T dingo \
+  cardano-cli conway transaction txid --tx-file "$tx_signed" |
+  tr -d ' \r\n' |
+  sed -n 's/.*\([0-9a-f]\{64\}\).*/\1/p')
+if [ -z "$txid" ]; then
+  echo "Could not determine the submitted transaction id." >&2
+  exit 1
+fi
+
+attempt=0
+while [ "$attempt" -lt 60 ]; do
+  confirmed=$(sh scripts/compose.sh exec -T dingo \
+    cardano-cli query utxo \
+    --address "$address" \
+    --socket-path "$socket" \
+    --testnet-magic 42 2>/dev/null || true)
+  case "$confirmed" in
+    *"$txid"*) break ;;
+  esac
+  attempt=$((attempt + 1))
+  sleep 1
+done
+case "$confirmed" in
+  *"$txid"*) ;;
+  *)
+    echo "Funding transaction $txid was not confirmed on the devnet." >&2
+    exit 1
+    ;;
+esac
