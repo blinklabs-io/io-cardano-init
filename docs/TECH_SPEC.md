@@ -855,13 +855,15 @@ Pure logic over `S_old`, `S_new`, and the registry (`scaffold::update`, beside t
 | absent → present | **CREATE**: plan+render that component into its dir. Precondition: the dir must not already exist on disk; if it does (a foreign/unrecognized dir), abort (`slot_occupied`). |
 | present → absent | **REMOVE**: `rm -rf <dir>` (removes user-added files in that dir too — intentional; git is the net). |
 | present → present, tool changed | **REPLACE**: REMOVE then CREATE. |
-| present → present, tool same (non-infra) | **KEEP** — never touched. |
+| present → present, tool same (non-infra) | **KEEP** — never touched, except the shared `.env` writer scripts (see below). |
 | infra: provider set changed (dir stays) | **RE-RENDER IN PLACE**: overwrite `infra/`'s managed files (`Justfile`, `README.md`, `scripts/write-env.sh`) from the new provider set. |
 | infra → empty | **REMOVE** `infra/`. |
 
 **Fusion boundary** is just rows in this table — no special "migration":
 - two dirs (`on-chain`+`off-chain`) → fullstack tool = REMOVE both + CREATE `protocol/` (a full replace; nothing is carried over — the code in the two dirs is deleted, loudly, git-recoverable).
 - `protocol/` → separate tools = REMOVE `protocol/` + CREATE the new dir(s). "Drop the off-chain half of a fused `protocol/`" is expressed as *replace `protocol/` with an on-chain tool* — the user must name that tool; there is no in-place split of a fused codebase.
+
+**`.env` writers are shared, not component-owned.** The generated scripts that write the project `.env` (`infra/scripts/write-env.sh`, `infra/scripts/with-env-lock.ps1`, and each devnet's `scripts/set-env.*`) sit inside component directories but implement a mutual-exclusion protocol over a single file at the project root. They are only correct while every writer in the project speaks the same version of that protocol, so they are planned as **shared layer** and refreshed even inside a KEPT directory. Without this, `cardano-init add --devnet yaci` against a project whose `infra/` is unchanged would leave a pre-protocol infra writer beside a new devnet writer and a concurrent `just dev` could still lose one writer's keys. This is the only thing written into a KEPT directory; it is safe because these are generated scripts rather than user code, and the content diff below still applies.
 
 **Shared layer** is always recomputed from `S_new` and written **per-file with a content diff** — a file is only rewritten if its bytes change (so a slot swap that doesn't alter, say, `.gitignore` leaves it alone). `blueprint/.gitkeep` is added/removed to match the predicate `any(role != Infrastructure)` (§6.2); `flake.nix`/`.envrc` follow the nix flag.
 
@@ -909,7 +911,7 @@ Error codes are defined in §2.5. This extends the init matrix (§12) for `add`/
 | 11 | `protocol/` → drop off-chain half | REPLACE `protocol/` with a user-named on-chain tool; no in-place split. |
 | 12 | Same tool on both roles, no `[fullstack]` | Two separate dirs (not fused); each removable independently. |
 | 13 | Infra provider set changes | RE-RENDER `infra/` in place from the new set; other slots untouched. |
-| 14 | Unchanged slot (e.g. Aiken while off-chain changes) | KEEP — provably untouched (§15.5). |
+| 14 | Unchanged slot (e.g. Aiken while off-chain changes) | KEEP — provably untouched, apart from the shared `.env` writers (§15.5). |
 | 15 | Unrecognized/renamed/foreign component dir | Interactive: surfaced, then a confirm to proceed with the detected stack (the odd dir is left in place, ignored). Non-interactive: `project_unrecognized` (fatal). |
 | 16 | Ambiguous detection (2+ tools match one dir) | Resolved by definitive-match tiebreak (§9.6): a single bare-path/manifest match wins over shared-file `contains` matches. Only if that leaves 2+ still tied is the dir treated as unrecognized. |
 | 17 | `infra/Justfile` hand-edited so providers unparseable | Recovered set shown in confirm; user corrects; non-interactive → treat as unrecognized. |
