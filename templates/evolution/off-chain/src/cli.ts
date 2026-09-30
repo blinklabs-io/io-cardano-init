@@ -81,10 +81,11 @@ async function create(tokenName: string, lovelace: string): Promise<void> {
     }
   }
 
-  const { txHash, redeemAddress } = await contract.createGiftCard(
+  const { txCbor, redeemAddress } = await contract.createGiftCard(
     tokenName,
     BigInt(lovelace),
   );
+  const txHash = await contract.signAndSubmit(txCbor);
 
   console.log(`Gift card "${tokenName}" created.`);
   console.log(`  tx:      ${txHash}`);
@@ -109,7 +110,8 @@ async function redeem(redeemAddress: string): Promise<void> {
     );
   }
 
-  const txHash = await contract.redeemGiftCard(giftCardUtxo);
+  const txCbor = await contract.redeemGiftCard(giftCardUtxo);
+  const txHash = await contract.signAndSubmit(txCbor);
 
   console.log("Gift card redeemed; assets released to your wallet.");
   console.log(`  tx: ${txHash}`);

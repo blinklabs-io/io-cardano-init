@@ -10,7 +10,9 @@ import {
   InlineDatum,
   PlutusV3,
   ScriptHash,
+  Transaction,
   TransactionHash,
+  TransactionWitnessSet,
   UPLC,
   type UTxO,
 } from "@evolution-sdk/evolution";
@@ -52,9 +54,9 @@ export type SeedUtxo = {
 
 /** The result of a successful `createGiftCard`. */
 export type GiftCardCreation = {
-  /** Hash of the create transaction. */
-  txHash: string;
-  /** Bech32 redeem script address the gift landed at — pass to `getGiftCardUtxoAt`. */
+  /** The unsigned create transaction as CBOR hex — sign and submit it. */
+  txCbor: string;
+  /** Bech32 redeem script address the gift lands at — pass to `getGiftCardUtxoAt`. */
   redeemAddress: string;
   /** The gift-card token's asset unit (policy id + hex token name). */
   unit: string;
@@ -148,14 +150,18 @@ function plutusV3FromApplied(appliedDoubleCbor: string): PlutusV3.PlutusV3 {
  * frontend to preview an address.
  */
 export class GiftCardContract {
-  private readonly client: Client.SigningClient;
+  private readonly client: Client.ReadOnlyClient | Client.SigningClient;
   private readonly networkId: number;
   private readonly giftCardCompiledCode: string;
   private readonly redeemCompiledCode: string;
 
   constructor(input: {
-    /** A signing client (provider + wallet), e.g. from `createGiftCardContractFromEnv`. */
-    client: Client.SigningClient;
+    /**
+     * A read-only client (provider + address) is enough to build transactions;
+     * `signAndSubmit` needs a signing client (provider + wallet), e.g. from
+     * `createGiftCardContractFromEnv`.
+     */
+    client: Client.ReadOnlyClient | Client.SigningClient;
     /** 0 for testnets (preview/preprod), 1 for mainnet. */
     networkId: number;
     /** Override the bundled blueprint (defaults to the build-time bundle). */
@@ -228,11 +234,13 @@ export class GiftCardContract {
   }
 
   /**
-   * Build, sign, and submit a transaction that mints a unique gift-card token
-   * and locks `giftLovelace` at the redeem script address.
+   * Build a transaction that mints a unique gift-card token and locks
+   * `giftLovelace` at the redeem script address. Returns the UNSIGNED tx as
+   * CBOR hex — sign and submit it with `signAndSubmit`, a browser wallet, or
+   * your own signer.
    *
-   * Returns the tx hash plus the (unique) redeem script address the gift landed
-   * at and its asset unit — pass the address to `getGiftCardUtxoAt` to redeem.
+   * Also returns the (unique) redeem script address the gift lands at and its
+   * asset unit — pass the address to `getGiftCardUtxoAt` to redeem.
    * Each gift card has its own address (the redeem script is parameterised by
    * the one-shot policy id), so the address alone identifies this gift card.
    */
@@ -281,9 +289,8 @@ export class GiftCardContract {
       })
       .build();
 
-    const signed = await built.sign();
-    const txHash = TransactionHash.toHex(await signed.submit());
-    return { txHash, redeemAddress: Address.toBech32(redeemAddress), unit };
+    const txCbor = Transaction.toCBORHex(await built.toTransaction());
+    return { txCbor, redeemAddress: Address.toBech32(redeemAddress), unit };
   };
 
   /**
@@ -302,9 +309,9 @@ export class GiftCardContract {
   };
 
   /**
-   * Build, sign, and submit a transaction that burns a gift-card token and
-   * releases the locked assets. `giftCardUtxo` sits at the redeem script address
-   * (see `getGiftCardUtxoAt`). Returns the tx hash.
+   * Build a transaction that burns a gift-card token and releases the locked
+   * assets. `giftCardUtxo` sits at the redeem script address (see
+   * `getGiftCardUtxoAt`). Returns the UNSIGNED tx as CBOR hex.
    */
   redeemGiftCard = async (giftCardUtxo: UTxO.UTxO): Promise<string> => {
     const datumOption = giftCardUtxo.datumOption;
@@ -335,7 +342,27 @@ export class GiftCardContract {
       .attachScript({ script: giftCardScript })
       .build();
 
-    const signed = await built.sign();
-    return TransactionHash.toHex(await signed.submit());
+    return Transaction.toCBORHex(await built.toTransaction());
+  };
+
+  /**
+   * Sign an unsigned transaction with the client's wallet and submit it.
+   * Needs a signing client. Returns the tx hash.
+   */
+  signAndSubmit = async (unsignedTx: string): Promise<string> => {
+    if (!("signTx" in this.client)) {
+      throw new Error("signAndSubmit needs a signing client (provider + wallet).");
+    }
+    // A seed wallet signs only for inputs it finds in `utxos`; CIP-30 ignores them.
+    const witnesses = await this.client.signTx(unsignedTx, {
+      utxos: await this.client.getWalletUtxos(),
+    });
+    const signed = Transaction.addVKeyWitnessesHex(
+      unsignedTx,
+      TransactionWitnessSet.toCBORHex(witnesses),
+    );
+    return TransactionHash.toHex(
+      await this.client.submitTx(Transaction.fromCBORHex(signed)),
+    );
   };
 }

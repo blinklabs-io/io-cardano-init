@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 
 import { config as loadDotenv } from "dotenv";
-import { TransactionHash } from "@evolution-sdk/evolution";
+import { Transaction, TransactionHash } from "@evolution-sdk/evolution";
 import { describe, expect, it } from "vitest";
 
 import { GiftCardContract, hasBundledBlueprint } from "./contract.js";
 import {
   createClient,
+  createProviderClient,
   topupOnDevnet,
   walletAddress,
   type GiftCardEnv,
@@ -81,10 +82,19 @@ const env: GiftCardEnv = {
       }
 
       // Create: mint a unique token and lock 5 ADA at the redeem script address.
-      const { txHash: createTx, redeemAddress } = await contract.createGiftCard(
+      // A backend builds it with a read-only client (the user's address, no
+      // keys); the wallet signs and submits.
+      const backend = new GiftCardContract({
+        client: (await createProviderClient(env)).withAddress(address),
+        networkId: 0,
+      });
+      const { txCbor, redeemAddress } = await backend.createGiftCard(
         "IntegrationGift",
         5_000_000n,
       );
+      const { witnessSet } = Transaction.fromCBORHex(txCbor);
+      expect(witnessSet.vkeyWitnesses ?? [], "built unsigned").toHaveLength(0);
+      const createTx = await contract.signAndSubmit(txCbor);
       await client.awaitTx(TransactionHash.fromHex(createTx));
 
       let giftUtxo = await contract.getGiftCardUtxoAt(redeemAddress);
@@ -95,7 +105,9 @@ const env: GiftCardEnv = {
       expect(giftUtxo, "the create tx should produce a gift-card UTxO").toBeDefined();
 
       // Redeem: burn the token and release the locked assets back to the wallet.
-      const redeemTx = await contract.redeemGiftCard(giftUtxo!);
+      const redeemTx = await contract.signAndSubmit(
+        await contract.redeemGiftCard(giftUtxo!),
+      );
       await client.awaitTx(TransactionHash.fromHex(redeemTx));
       expect(redeemTx).toMatch(/^[0-9a-f]{64}$/);
     },
