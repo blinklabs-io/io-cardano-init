@@ -16,7 +16,7 @@ import { GiftCardContract } from "./contract.js";
 // provider + wallet into an Evolution SDK signing client. Importing this in a
 // browser bundle would pull in `node:fs` (via dotenv); frontends import the
 // package root ("." → ./contract), which already carries the bundled blueprint,
-// and build their own client with `.withCip30(walletApi)`.
+// and build their own client with a provider, then `.withCip30(walletApi)`.
 
 const CHAINS = { preview, preprod, mainnet } as const;
 const NETWORK_IDS = { preview: 0, preprod: 0, mainnet: 1 } as const;
@@ -224,13 +224,18 @@ export function installYaciStoreFetchShim(): void {
 }
 
 /**
- * Build an Evolution SDK signing client from the resolved environment.
+ * Build an Evolution SDK provider client from the resolved environment: it
+ * reaches the chain but has no wallet. Add one with `.withAddress(userAddress)`
+ * (read-only, e.g. a backend building for the user's wallet) or `.withSeed(...)`
+ * (signing, see `createClient`).
  *
  * Async because the Yaci path fetches the devnet's live genesis to build a
  * matching `Chain` (and installs the Yaci Store response shim). The public
  * Blockfrost path uses the static network chain and resolves immediately.
  */
-export async function createClient(env: GiftCardEnv): Promise<Client.SigningClient> {
+export async function createProviderClient(
+  env: Pick<GiftCardEnv, "network" | "provider">,
+): Promise<Client.ReadClient> {
   // Defensive: the provider joins request paths as `${baseUrl}/…`, so a
   // trailing slash would create a `//` the indexer 404s on.
   const baseUrl = env.provider.baseUrl.replace(/\/+$/, "");
@@ -252,14 +257,21 @@ export async function createClient(env: GiftCardEnv): Promise<Client.SigningClie
       projectId: env.provider.projectId,
     });
   }
-  return read.withSeed({ mnemonic: env.mnemonic, accountIndex: 0 });
+  return read;
+}
+
+/** Build an Evolution SDK signing client: the provider plus the MNEMONIC wallet. */
+export async function createClient(env: GiftCardEnv): Promise<Client.SigningClient> {
+  const providerClient = await createProviderClient(env);
+  return providerClient.withSeed({ mnemonic: env.mnemonic, accountIndex: 0 });
 }
 
 /**
  * Wire up a provider (Yaci devnet or Blockfrost, per the environment), a
  * mnemonic-backed wallet, and a GiftCardContract. The contract uses the
  * blueprint bundled at build time. Backend convenience; a frontend builds its
- * own client with `.withCip30(...)` and constructs GiftCardContract directly.
+ * own client (a provider, then `.withCip30(...)`) and constructs
+ * GiftCardContract directly.
  */
 export async function createGiftCardContractFromEnv(options: {
   env: GiftCardEnv;
